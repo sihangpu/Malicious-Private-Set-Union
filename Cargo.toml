@@ -1,0 +1,16 @@
+[package]
+name = "curve25519_elligator_utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+curve25519-dalek = { path = "./curve25519-dalek" }
+rand = "0.9"
+subtle = "2"
+
+
+[patch.crates-io]
+curve25519-dalek = { path = "./curve25519-dalek" }
+
+[build]
+rustflags = ["-C", "target_cpu=native"]
