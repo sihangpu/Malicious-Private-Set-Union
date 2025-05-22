@@ -90,76 +90,86 @@ pub fn field_mont_point(r: &FieldElement) -> MontgomeryPoint {
 // ---------------------------------------------------------------------------
 //  Inverse map: Montgomery → Field (if in the Elligator image)
 // ---------------------------------------------------------------------------
-#[inline]
-pub fn mont_point_field(P: &MontgomeryPoint) -> Option<FieldElement> {
+pub fn mont_point_field(P: &MontgomeryPoint) -> Vec<FieldElement> {
     let a = fe_a();
     let z = fe_z();
 
-    // Parse u‑coordinate
+    // u‑coordinate
     let u = FieldElement::from_bytes(&P.to_bytes());
 
-    // Reject exceptional u = −A
+    // Exceptional case u = –A (denominator zero in formulas)
     if u == a.neg() {
-        return None;
+        return vec![];
     }
 
-    // v² = u³ + A·u² + u
-    let v2 = {
-        let u2 = u.square();
-        let t1 = &u2 * &u;
-        let t2 = &u2 * &a;
-        &(&t1 + &t2) + &u
-    };
+    // Step 1: t = u + A
+    let t = &u + &a;
 
-    // (is_sq_v, v) = sqrt_ratio_i(v², 1)
-    let (_is_sq_v, v): (Choice, FieldElement) = FieldElement::sqrt_ratio_i(&v2, &FieldElement::ONE);
+    // Step 2: zu = –Z * u   (note: –Z is z.neg())
+    let zu = &(z.neg()) * &u;
 
-    // Branch on sign of v
-    let (num, den) = if v.is_negative().unwrap_u8() == 0 {
-        // v >= 0  ⇒ r = √(–u /(Z·(u + A)))
-        (
-            u.neg(),         // numerator –u
-            &z * &(&u + &a), // denominator Z·(u + A)
-        )
-    } else {
-        // v < 0  ⇒ r = √(–(u + A)/(Z·u))
-        (
-            (&u + &a).neg(), // numerator –(u + A)
-            &z * &u,         // denominator Z·u
-        )
-    };
+    // Step 3: r = zu * t
+    let mut r = &zu * &t;
 
-    // (is_sq_r, r) = sqrt_ratio_i(num, den)
-    let (is_sq_r, mut r): (Choice, FieldElement) = FieldElement::sqrt_ratio_i(&num, &den);
-    if is_sq_r.unwrap_u8() == 0 {
-        return None;
+    // Step 4: (is_sq, r) = sqrt_ratio_i(1, r)
+    let (is_sq, mut r): (Choice, FieldElement) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &r);
+
+    // Step 5: if not square → no representative
+    if is_sq.unwrap_u8() == 0 {
+        return vec![];
     }
 
-    // Make r canonical (positive)
-    if r.is_negative().unwrap_u8() == 1 {
-        r = r.neg();
-    }
+    // Step 6: r0 = t * r  ;  r1 = u * r
+    let mut r0 = &t * &r;
+    let mut r1 = &u * &r;
 
-    Some(r)
+    // Canonicalize signs and collect results
+    let mut reps = Vec::with_capacity(2);
+
+    if r0.is_negative().unwrap_u8() == 1 {
+        r0 = r0.neg();
+    }
+    reps.push(r0);
+
+    if r1.is_negative().unwrap_u8() == 1 {
+        r1 = r1.neg();
+    }
+    reps.push(r1);
+
+    reps
 }
 
 // ---------------------------------------------------------------------------
-//  Tests (quick sanity only)
+//  Tests (deterministic)
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::prelude::*;
 
     #[test]
     fn round_trip_deterministic() {
-        // Use a fixed, non‑canonical 32‑byte sequence to get a non‑trivial field element.
-        let bytes = [7u8; 32];
+        let bytes = [6u8; 32];
         let r = FieldElement::from_bytes(&bytes);
         let P = field_mont_point(&r);
-        let r_back = mont_point_field(&P).expect("not in image");
-        println!("r = {:?}", r);
-        println!("r_back = {:?}", r_back);
-        assert!(r == r_back || r == r_back.neg());
+        let reps = mont_point_field(&P);
+        assert!(reps.iter().any(|x| *x == r || *x == r.neg()));
+    }
+
+    #[test]
+    fn round_trip_randomized() {
+        for _ in 0..1000 {
+            let mut bytes = [0u8; 32];
+            rand::rng().fill_bytes(&mut bytes);
+            let r = FieldElement::from_bytes(&bytes);
+            let P = field_mont_point(&r);
+            let reps = mont_point_field(&P);
+            assert!(
+                reps.iter().any(|x| *x == r || *x == r.neg()),
+                "Elligator round-trip failed for r = {:?}",
+                bytes
+            );
+        }
     }
 }
 
