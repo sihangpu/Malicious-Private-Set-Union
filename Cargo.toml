@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-curve25519-dalek = { path = "./curve25519-dalek" }
+curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core"] }
 rand = "0.9"
 subtle = "2"
 
@@ -14,3 +14,13 @@ curve25519-dalek = { path = "./curve25519-dalek" }
 
 [build]
 rustflags = ["-C", "target_cpu=native"]
+
+[profile.release]
+lto = true
+
+[profile.dev]
+lto = true
+opt-level = 3
+codegen-units = 1
+debug = false
+overflow-checks = false

@@ -145,15 +145,62 @@ pub fn mont_point_field(P: &MontgomeryPoint) -> Vec<FieldElement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use curve25519_dalek::edwards::EdwardsPoint;
+    use curve25519_dalek::scalar::Scalar;
     use rand::prelude::*;
+    use std::time::Instant;
 
     #[test]
     fn round_trip_deterministic() {
         let bytes = [6u8; 32];
         let r = FieldElement::from_bytes(&bytes);
+
+        let start = Instant::now();
         let P = field_mont_point(&r);
+        let elapsed = start.elapsed();
+
+        let start2 = Instant::now();
         let reps = mont_point_field(&P);
+        let elapsed2 = start2.elapsed();
+
+        println!("Elapsed time: F2P- {:?} and P2F- {:?}", elapsed, elapsed2);
+
         assert!(reps.iter().any(|x| *x == r || *x == r.neg()));
+    }
+
+    #[test]
+    fn scalar_mult_test() {
+        // Benchmark scalar mult on Montgomery
+        let l_plus_two_bytes: [u8; 32] = [
+            0xef, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x10,
+        ];
+        let k: Scalar = Scalar::from_bytes_mod_order(l_plus_two_bytes);
+
+        let bytes = [6u8; 32];
+        let r = FieldElement::from_bytes(&bytes);
+        let P = field_mont_point(&r);
+
+        let start = Instant::now();
+        let _ = P * k;
+        let elapsed = start.elapsed();
+
+        // Benchmark scalar mult on Edwards
+        let E = P.to_edwards(0u8).unwrap();
+
+        let start2 = Instant::now();
+        let _ = E * k;
+        let elapsed2 = start2.elapsed();
+
+        let start3 = Instant::now();
+        let _ = curve25519_dalek::constants::ED25519_BASEPOINT_POINT * k;
+        let elapsed3 = start3.elapsed();
+
+        println!(
+            "Elapsed time: scalar-mont- {:?} and scalar-edwards- {:?} and base-edwards- {:?}",
+            elapsed, elapsed2, elapsed3
+        );
     }
 
     #[test]
