@@ -7,10 +7,14 @@
 //! * Uses 51‑bit limb backend via `FieldElement::from_limbs`.
 
 use core::ops::Neg;
+
 use curve25519_dalek::{
     constants, // SQRT_M1 lives here
+    edwards::EdwardsPoint,
     field::FieldElement,
     montgomery::MontgomeryPoint,
+    scalar::Scalar,
+    traits::Identity,
 };
 use subtle::Choice; // constant‑time booleans
 
@@ -140,13 +144,24 @@ pub fn mont_point_field(P: &MontgomeryPoint) -> Vec<FieldElement> {
 }
 
 // ---------------------------------------------------------------------------
+// Enumerate Edwards representatives (cofactor handling)
+// ---------------------------------------------------------------------------
+#[inline]
+pub fn enumerate_representatives(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
+    let mut reps = [EdwardsPoint::identity(); 8];
+    for (i, T) in constants::EIGHT_TORSION.iter().enumerate() {
+        reps[i] = p + T;
+    }
+    reps
+}
+
+// ---------------------------------------------------------------------------
 //  Tests (deterministic)
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
-    use curve25519_dalek::edwards::EdwardsPoint;
-    use curve25519_dalek::scalar::Scalar;
+    // use curve25519_dalek::scalar::Scalar;
     use rand::prelude::*;
     use std::time::Instant;
 
@@ -169,6 +184,25 @@ mod tests {
     }
 
     #[test]
+    fn enumerate_representatives_test() {
+        let bytes = [6u8; 32];
+        let r = FieldElement::from_bytes(&bytes);
+        let P = field_mont_point(&r);
+        let E = P.to_edwards(0u8).unwrap().mul_by_cofactor();
+        let inv8 = Scalar::from(8u64).invert();
+
+        let Ep = E * &inv8;
+
+        let start = Instant::now();
+        let reps = enumerate_representatives(&Ep);
+        let elapsed = start.elapsed();
+
+        println!("Elapsed time: coset- {:?}", elapsed);
+
+        assert!(reps.iter().any(|x| x.mul_by_cofactor() == E));
+    }
+
+    #[test]
     fn scalar_mult_test() {
         // Benchmark scalar mult on Montgomery
         let l_plus_two_bytes: [u8; 32] = [
@@ -187,7 +221,7 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Benchmark scalar mult on Edwards
-        let E = P.to_edwards(0u8).unwrap();
+        let E = P.to_edwards(0u8).unwrap().mul_by_cofactor();
 
         let start2 = Instant::now();
         let _ = E * k;
@@ -219,34 +253,3 @@ mod tests {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Enumerate Edwards representatives (cofactor handling)
-// ---------------------------------------------------------------------------
-// #[inline]
-// pub fn ite_edwpoints(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
-//     assert!(!p.is_identity(), "identity has no cofactor representatives");
-//     let mut reps = [EdwardsPoint::identity(); 8];
-//     reps[0] = *p;
-//     reps[1] = &reps[0] + p; //   2P
-//     reps[2] = &reps[1] + p; //   3P
-//     reps[3] = &reps[2] + p; //   4P
-//     reps[4] = &reps[3] + p; //   5P
-//     reps[5] = &reps[4] + p; //   6P
-//     reps[6] = &reps[5] + p; //   7P
-//     reps[7] = &reps[6] + p; //   8P → identity
-//     reps
-// }
-
-// ---------------------------------------------------------------------------
-// Conversions between models
-// ---------------------------------------------------------------------------
-// #[inline]
-// pub fn mont_to_edwards(m: &MontgomeryPoint) -> Option<EdwardsPoint> {
-//     m.to_edwards(0u8)
-// }
-
-// #[inline]
-// pub fn edwards_to_mont(e: &EdwardsPoint) -> MontgomeryPoint {
-//     e.to_montgomery()
-// }

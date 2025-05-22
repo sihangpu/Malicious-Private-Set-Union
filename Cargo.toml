@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core"] }
+curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core","alloc"] }
 rand = "0.9"
 subtle = "2"
 
@@ -15,12 +15,21 @@ curve25519-dalek = { path = "./curve25519-dalek" }
 [build]
 rustflags = ["-C", "target_cpu=native"]
 
+
 [profile.release]
-lto = true
+opt-level = 3       # maximum optimization
+lto = true          # link-time optimization
+codegen-units = 1   # reduce codegen units for better inlining
+panic = "abort"     # smaller binary
+overflow-checks = false
+strip = "symbols"   # strip symbols to reduce size
+
+
 
 [profile.dev]
-lto = true
-opt-level = 3
-codegen-units = 1
-debug = false
+opt-level = 3       # maximum optimization
+lto = true          # link-time optimization
+codegen-units = 1   # reduce codegen units for better inlining
+panic = "abort"     # smaller binary
 overflow-checks = false
+strip = "symbols"   # strip symbols to reduce size
