@@ -9,10 +9,10 @@
 use core::ops::Neg;
 use curve25519_dalek::{
     constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
-    scalar::Scalar, traits::Identity,
+    scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
 use lazy_static::lazy_static;
-use subtle::Choice;
+use rand::{rngs::OsRng, CryptoRng, RngCore};
 
 // Pre-compute all constants at startup
 lazy_static! {
@@ -23,14 +23,6 @@ lazy_static! {
     static ref FE_A_SQUARED: FieldElement = FE_A.square();
     static ref FE_ZU_CONST: FieldElement = &*FE_Z_NEG * &constants::SQRT_M1;
     static ref SC_INV_8: Scalar = Scalar::from(8u64).invert();
-}
-
-// Helper function for constant-time conditional assignment (v3.x compatible)
-#[inline(always)]
-fn conditional_assign(target: &mut FieldElement, source: &FieldElement, condition: Choice) {
-    if condition.unwrap_u8() == 1 {
-        *target = *source;
-    }
 }
 
 // Optimized direct mapping with reduced allocations
@@ -72,8 +64,8 @@ pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
 
 // Optimized inverse mapping
 #[inline(always)]
-pub fn mont_point_field_optimized(P: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
-    let u = FieldElement::from_bytes(&P.to_bytes());
+pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
+    let u = FieldElement::from_bytes(&p.to_bytes());
 
     // Early exit check using pre-computed constant
     if u == *FE_A_NEG {
@@ -163,6 +155,20 @@ pub fn round_trip_optimized(r: &FieldElement) -> Option<[FieldElement; 2]> {
 }
 
 // Performance utilities
+
+fn generate_dataset<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    n: usize,
+) -> (Vec<Scalar>, Vec<EdwardsPoint>) {
+    let scalars: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+
+    let points: Vec<EdwardsPoint> = (0..n)
+        .map(|_| EdwardsPoint::mul_base(&Scalar::random(rng)))
+        .collect();
+
+    (scalars, points)
+}
+
 pub struct PerformanceStats {
     pub field_to_mont_ops_per_sec: f64,
     pub mont_to_field_ops_per_sec: f64,
@@ -170,6 +176,7 @@ pub struct PerformanceStats {
     pub scalar_mult_ops_per_sec: f64,
     pub ed_scalar_mult_ops_per_sec: f64,
     pub ed_fixed_base_ops_per_sec: f64,
+    pub ed_msm_ops_per_sec: f64,
 }
 
 pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
@@ -221,6 +228,13 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     }
     let ed_fixed_base_time = start.elapsed();
 
+    // Benchmark Edwards multi-scalar multiplication
+    let mut rng = OsRng;
+    let (scalars, points) = generate_dataset(&mut rng, iterations);
+    let start = Instant::now();
+    let _ = EdwardsPoint::vartime_multiscalar_mul(&scalars, &points);
+    let ed_msm_time = start.elapsed();
+
     PerformanceStats {
         field_to_mont_ops_per_sec: iterations as f64 / field_to_mont_time.as_secs_f64(),
         mont_to_field_ops_per_sec: iterations as f64 / mont_to_field_time.as_secs_f64(),
@@ -228,14 +242,15 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
         scalar_mult_ops_per_sec: iterations as f64 / scalar_mult_time.as_secs_f64(),
         ed_scalar_mult_ops_per_sec: iterations as f64 / ed_scalar_mult_time.as_secs_f64(),
         ed_fixed_base_ops_per_sec: iterations as f64 / ed_fixed_base_time.as_secs_f64(),
+        ed_msm_ops_per_sec: iterations as f64 / ed_msm_time.as_secs_f64(),
     }
 }
 
 #[cfg(test)]
 mod basic_tests {
     use super::*;
-    use rand::prelude::*;
-    use std::{iter, time::Instant};
+    // use rand::prelude::*;
+    // use std::{iter, time::Instant};
 
     #[test]
     fn correctness_test() {
@@ -253,12 +268,12 @@ mod basic_tests {
             panic!("No preimage exists for the given point");
         }
 
-        let E = p1.to_edwards(0u8).unwrap().mul_by_cofactor();
-        let Ep = E * &*SC_INV_8;
+        let e1 = p1.to_edwards(0u8).unwrap().mul_by_cofactor();
+        let e2 = e1 * &*SC_INV_8;
 
-        let reps = enumerate_representatives_optimized(&Ep);
+        let reps = enumerate_representatives_optimized(&e2);
 
-        assert!(reps.iter().any(|x| x.mul_by_cofactor() == E));
+        assert!(reps.iter().any(|x| x.mul_by_cofactor() == e1));
 
         let mut found = false;
         for i in 0..8 {
@@ -278,39 +293,44 @@ mod basic_tests {
 
     #[test]
     fn comprehensive_performance_benchmark() {
-        let iterations = 10000;
+        let iterations = 10_000;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");
         println!(
-            "Field → Montgomery: {:.0} ops/sec; each {:.0} us",
+            "Field → Montgomery: {:.0} ops/sec; each {:.1} us",
             stats.field_to_mont_ops_per_sec,
             1_000_000f64 / stats.field_to_mont_ops_per_sec
         );
         println!(
-            "Montgomery → Field: {:.0} ops/sec; each {:.0} us\n",
+            "Montgomery → Field: {:.0} ops/sec; each {:.1} us\n",
             stats.mont_to_field_ops_per_sec,
             1_000_000f64 / stats.mont_to_field_ops_per_sec
         );
         println!(
-            "Enumerate Representatives: {:.0} ops/sec; each {:.0} us",
+            "Enumerate Representatives: {:.0} ops/sec; each {:.1} us",
             stats.enumerate_reps_ops_per_sec,
             1_000_000f64 / stats.enumerate_reps_ops_per_sec
         );
         println!(
-            "Montgomery Scalar Mult: {:.0} ops/sec; each {:.0} us",
+            "Montgomery Scalar Mult: {:.0} ops/sec; each {:.1} us",
             stats.scalar_mult_ops_per_sec,
             1_000_000f64 / stats.scalar_mult_ops_per_sec
         );
         println!(
-            "Edwards Scalar Mult: {:.0} ops/sec; each {:.0} us",
+            "Edwards Scalar Mult: {:.0} ops/sec; each {:.1} us",
             stats.ed_scalar_mult_ops_per_sec,
             1_000_000f64 / stats.ed_scalar_mult_ops_per_sec
         );
         println!(
-            "Edwards Fixed-Base Mult: {:.0} ops/sec; each {:.0} us",
+            "Edwards Fixed-Base Mult: {:.0} ops/sec; each {:.1} us",
             stats.ed_fixed_base_ops_per_sec,
             1_000_000f64 / stats.ed_fixed_base_ops_per_sec
+        );
+        println!(
+            "Edwards Multi-Scalar Mult: {:.0} ops/sec; each {:.1} us",
+            stats.ed_msm_ops_per_sec,
+            1_000_000f64 / stats.ed_msm_ops_per_sec
         );
         println!("=====================================\n");
     }
