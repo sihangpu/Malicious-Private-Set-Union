@@ -109,10 +109,14 @@ pub fn mont_point_field(P: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
     if is_sq.unwrap_u8() == 0 {
         return None;
     }
+
+    // negative sign
     let mut r0 = &t * &r;
     if r0.is_negative().unwrap_u8() == 1 {
         r0 = r0.neg();
     }
+
+    // positive sign
     let mut r1 = &u * &r;
     if r1.is_negative().unwrap_u8() == 1 {
         r1 = r1.neg();
@@ -125,8 +129,8 @@ pub fn mont_point_field(P: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
 #[inline]
 pub fn enumerate_representatives(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
-    for (i, T) in constants::EIGHT_TORSION.iter().enumerate() {
-        reps[i] = p + T;
+    for (i, t) in constants::EIGHT_TORSION.iter().enumerate() {
+        reps[i] = p + t;
     }
     reps
 }
@@ -166,7 +170,7 @@ mod tests {
 
     #[test]
     fn enumerate_representatives_test() {
-        let bytes = [6u8; 32];
+        let bytes = [7u8; 32];
         let r = FieldElement::from_bytes(&bytes);
         let P = field_mont_point(&r);
         let E = P.to_edwards(0u8).unwrap().mul_by_cofactor();
@@ -181,6 +185,21 @@ mod tests {
         println!("Elapsed time: coset- {:?}", elapsed);
 
         assert!(reps.iter().any(|x| x.mul_by_cofactor() == E));
+
+        let mut found = false;
+        for i in 0..8 {
+            let pair = mont_point_field(&reps[i].to_montgomery());
+            if pair == None {
+                continue;
+            } else {
+                let pair = pair.unwrap();
+                if pair[0] == r || pair[0] == r.neg() || pair[1] == r || pair[1] == r.neg() {
+                    found = true;
+                    println!("\nFound corect representative {} and field element!", i);
+                }
+            }
+        }
+        assert!(found);
     }
 
     #[test]
