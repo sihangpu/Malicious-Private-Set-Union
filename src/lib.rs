@@ -312,5 +312,6 @@ mod basic_tests {
             stats.ed_fixed_base_ops_per_sec,
             1_000_000f64 / stats.ed_fixed_base_ops_per_sec
         );
+        println!("=====================================\n");
     }
 }

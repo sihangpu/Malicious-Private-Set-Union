@@ -29,12 +29,12 @@ opt-level = 3
 
 # Development profile with some optimizations for testing
 [profile.dev]
-opt-level = 1        # Some optimization for reasonable test performance
+opt-level = 3        # Some optimization for reasonable test performance
 
 # Benchmark profile
 [profile.bench]
 inherits = "release"
-debug = true         # Keep debug info for profiling
+debug = false         # Keep debug info for profiling
 
 # Build configuration for your CPU
 [build]
@@ -56,16 +56,10 @@ rustflags = [
 
 # Alternative: use native detection (comment out the above rustflags if using this)
 # target-cpu = "native"
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=apple-m1", "-C", "link-arg=-fuse-ld=lld"]
+target = "aarch64-apple-darwin"
 
 [features]
 default = ["simd_optimizations"]
 simd_optimizations = []
-
-# Conditional compilation for different optimization levels
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-# x86_64 specific optimizations could go here
-
-[package.metadata.docs.rs]
-# Ensure docs.rs builds work without target-specific features
-rustdoc-args = ["--cfg", "docsrs"]
-targets = ["x86_64-unknown-linux-gnu"]
