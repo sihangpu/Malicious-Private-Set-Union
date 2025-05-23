@@ -1,5 +1,5 @@
 [package]
-name = "curve25519_elligator_utils"
+name = "malicious-two-sided-output-private-set-union"
 version = "0.1.0"
 edition = "2021"
 
@@ -23,7 +23,7 @@ codegen-units = 1    # Better optimization but slower compile
 panic = "abort"      # Smaller binary, faster code
 overflow-checks = false
 
-# Target AMD Ryzen 7 3700X specifically
+
 [profile.release.build-override]
 opt-level = 3
 

@@ -41,16 +41,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "curve25519_elligator_utils"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "lazy_static",
- "rand",
- "subtle",
-]
-
-[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -78,6 +68,16 @@ name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
+
+[[package]]
+name = "malicious-two-sided-output-private-set-union"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "lazy_static",
+ "rand",
+ "subtle",
+]
 
 [[package]]
 name = "ppv-lite86"

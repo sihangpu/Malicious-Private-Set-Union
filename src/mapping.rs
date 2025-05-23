@@ -37,10 +37,10 @@ pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
     let t1 = &v_squared * &v;
     let (is_sq, inv) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &(&t3 * &t1));
 
-    // Use pre-computed constant for efficiency
+    // Use pre-computed constant
     let mut u = &u_squared * &*FE_ZU_CONST;
 
-    // Conditional assignment (v3.x compatible)
+    // Conditional assignment
     let one = FieldElement::ONE;
     if is_sq.unwrap_u8() == 1 {
         u = one;
@@ -79,7 +79,7 @@ pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 
     let tr = &t * &r;
     let ur = &u * &r;
 
-    // Manual sign normalization (v3.x compatible)
+    // Manual sign normalization
     let r0 = if tr.is_negative().unwrap_u8() == 1 {
         tr.neg()
     } else {
@@ -130,7 +130,7 @@ pub fn mont_points_field_batch(ps: &[MontgomeryPoint]) -> Vec<Option<[FieldEleme
 pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
 
-    // Manual unroll for better optimization (v3.x doesn't have as many const optimizations)
+    // Manual unroll for better optimization
     reps[0] = *p + constants::EIGHT_TORSION[0];
     reps[1] = *p + constants::EIGHT_TORSION[1];
     reps[2] = *p + constants::EIGHT_TORSION[2];
@@ -141,12 +141,6 @@ pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8
     reps[7] = *p + constants::EIGHT_TORSION[7];
 
     reps
-}
-
-// Optimized round-trip with single allocation
-pub fn round_trip_optimized(r: &FieldElement) -> Option<[FieldElement; 2]> {
-    let p = field_mont_point_optimized(r);
-    mont_point_field_optimized(&p)
 }
 
 // Performance utilities
@@ -252,7 +246,7 @@ mod basic_tests {
         let bytes = [7u8; 32];
         let r = FieldElement::from_bytes(&bytes);
 
-        // Test optimized implementation correctness
+        // Test correctness
         let p1 = field_mont_point_optimized(&r);
         let reps = mont_point_field_optimized(&p1);
 

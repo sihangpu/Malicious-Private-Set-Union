@@ -1,2 +1,2 @@
-pub mod elligator;
+pub mod mapping;
 pub mod shuffle;
