@@ -4,32 +4,68 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core","alloc"] }
-rand = "0.9"
-subtle = "2"
-
+curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core","alloc", "zeroize"] }
+subtle = "2.4"
+lazy_static = "1.4"
+rand = "0.8"
 
 [patch.crates-io]
 curve25519-dalek = { path = "./curve25519-dalek" }
 
-[build]
-rustflags = ["-C", "target_cpu=native"]
-
-
+# Performance optimization profiles
 [profile.release]
-opt-level = 3       # maximum optimization
-lto = true          # link-time optimization
-codegen-units = 1   # reduce codegen units for better inlining
-panic = "abort"     # smaller binary
+# Enable maximum optimizations
+opt-level = 3
+debug = false
+strip = true
+lto = "fat"          # Full link-time optimization
+codegen-units = 1    # Better optimization but slower compile
+panic = "abort"      # Smaller binary, faster code
 overflow-checks = false
-strip = "symbols"   # strip symbols to reduce size
 
+# Target AMD Ryzen 7 3700X specifically
+[profile.release.build-override]
+opt-level = 3
 
-
+# Development profile with some optimizations for testing
 [profile.dev]
-opt-level = 3       # maximum optimization
-lto = true          # link-time optimization
-codegen-units = 1   # reduce codegen units for better inlining
-panic = "abort"     # smaller binary
-overflow-checks = false
-strip = "symbols"   # strip symbols to reduce size
+opt-level = 1        # Some optimization for reasonable test performance
+
+# Benchmark profile
+[profile.bench]
+inherits = "release"
+debug = true         # Keep debug info for profiling
+
+# Build configuration for your CPU
+[build]
+# These flags target your specific CPU architecture
+rustflags = [
+    "-C", "target-cpu=znver2",           # AMD Zen 2 architecture (Ryzen 3000 series)
+    "-C", "target-feature=+avx2",        # Enable AVX2 instructions
+    "-C", "target-feature=+bmi2",        # Enable BMI2 bit manipulation
+    "-C", "target-feature=+aes",         # Enable AES-NI
+    "-C", "target-feature=+pclmul",      # Enable PCLMULQDQ
+    "-C", "target-feature=+rdrand",      # Enable RDRAND
+    "-C", "target-feature=+rdseed",      # Enable RDSEED
+    "-C", "target-feature=+sse4.2",      # Enable SSE4.2
+    "-C", "target-feature=+popcnt",      # Enable POPCNT
+    "-C", "target-feature=+lzcnt",       # Enable LZCNT
+    "-C", "force-frame-pointers=no",     # Reduce overhead
+    "-C", "llvm-args=-enable-machine-outliner=never", # Disable outliner for crypto code
+]
+
+# Alternative: use native detection (comment out the above rustflags if using this)
+# target-cpu = "native"
+
+[features]
+default = ["simd_optimizations"]
+simd_optimizations = []
+
+# Conditional compilation for different optimization levels
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+# x86_64 specific optimizations could go here
+
+[package.metadata.docs.rs]
+# Ensure docs.rs builds work without target-specific features
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
