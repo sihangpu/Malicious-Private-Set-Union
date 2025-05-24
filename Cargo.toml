@@ -4,17 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core","alloc", "zeroize"] }
+curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core","alloc", "serde","zeroize"] }
 subtle = "2.4"
 lazy_static = "1.4"
 rand = "0.8"
+merlin            = "3"
+thiserror         = "1"
 
 [patch.crates-io]
 curve25519-dalek = { path = "./curve25519-dalek" }
 
 # Performance optimization profiles
 [profile.release]
-# Enable maximum optimizations
 opt-level = 3
 debug = false
 strip = true
@@ -27,35 +28,20 @@ overflow-checks = false
 [profile.release.build-override]
 opt-level = 3
 
-# Development profile with some optimizations for testing
+
 [profile.dev]
 opt-level = 3        # Some optimization for reasonable test performance
 
-# Benchmark profile
+
 [profile.bench]
 inherits = "release"
-debug = false         # Keep debug info for profiling
+debug = false        
 
-# Build configuration for your CPU
+
 [build]
-# These flags target your specific CPU architecture
-rustflags = [
-    "-C", "target-cpu=znver2",           # AMD Zen 2 architecture (Ryzen 3000 series)
-    "-C", "target-feature=+avx2",        # Enable AVX2 instructions
-    "-C", "target-feature=+bmi2",        # Enable BMI2 bit manipulation
-    "-C", "target-feature=+aes",         # Enable AES-NI
-    "-C", "target-feature=+pclmul",      # Enable PCLMULQDQ
-    "-C", "target-feature=+rdrand",      # Enable RDRAND
-    "-C", "target-feature=+rdseed",      # Enable RDSEED
-    "-C", "target-feature=+sse4.2",      # Enable SSE4.2
-    "-C", "target-feature=+popcnt",      # Enable POPCNT
-    "-C", "target-feature=+lzcnt",       # Enable LZCNT
-    "-C", "force-frame-pointers=no",     # Reduce overhead
-    "-C", "llvm-args=-enable-machine-outliner=never", # Disable outliner for crypto code
-]
+target-cpu = "native"
 
-# Alternative: use native detection (comment out the above rustflags if using this)
-# target-cpu = "native"
+
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "target-cpu=apple-m1", "-C", "link-arg=-fuse-ld=lld"]
 

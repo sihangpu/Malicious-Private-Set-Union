@@ -126,7 +126,7 @@ pub fn mont_points_field_batch(ps: &[MontgomeryPoint]) -> Vec<Option<[FieldEleme
 }
 
 // Cache-friendly representative enumeration
-#[inline]
+#[inline(always)]
 pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
 
@@ -166,6 +166,7 @@ pub struct PerformanceStats {
     pub ed_scalar_mult_ops_per_sec: f64,
     pub ed_fixed_base_ops_per_sec: f64,
     pub ed_msm_ops_per_sec: f64,
+    pub ed_round_trip_compression: f64,
 }
 
 pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
@@ -224,6 +225,14 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     let _ = EdwardsPoint::vartime_multiscalar_mul(&scalars, &points);
     let ed_msm_time = start.elapsed();
 
+    // Benchmark Edwards round-trip compression
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let ed_y = test_point_ed.compress();
+        let _ = ed_y.decompress();
+    }
+    let ed_round_trip_time = start.elapsed();
+
     PerformanceStats {
         field_to_mont_ops_per_sec: iterations as f64 / field_to_mont_time.as_secs_f64(),
         mont_to_field_ops_per_sec: iterations as f64 / mont_to_field_time.as_secs_f64(),
@@ -232,6 +241,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
         ed_scalar_mult_ops_per_sec: iterations as f64 / ed_scalar_mult_time.as_secs_f64(),
         ed_fixed_base_ops_per_sec: iterations as f64 / ed_fixed_base_time.as_secs_f64(),
         ed_msm_ops_per_sec: iterations as f64 / ed_msm_time.as_secs_f64(),
+        ed_round_trip_compression: iterations as f64 / ed_round_trip_time.as_secs_f64(),
     }
 }
 
@@ -320,6 +330,11 @@ mod basic_tests {
             "Edwards Multi-Scalar Mult: {:.0} ops/sec; each {:.1} us",
             stats.ed_msm_ops_per_sec,
             1_000_000f64 / stats.ed_msm_ops_per_sec
+        );
+        println!(
+            "Edwards Round-Trip Compression: {:.0} ops/sec; each {:.1} us",
+            stats.ed_round_trip_compression,
+            1_000_000f64 / stats.ed_round_trip_compression
         );
         println!("=====================================\n");
     }
