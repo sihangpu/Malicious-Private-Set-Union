@@ -1,26 +1,29 @@
+use std::hint;
+
 use curve25519_dalek::{
+    constants,
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
-    traits::{Identity, VartimeMultiscalarMul},
+    traits::VartimeMultiscalarMul,
 };
-use rand::{rngs::OsRng, CryptoRng, RngCore};
+use rand::prelude::*;
+use rand::rngs::OsRng;
+use rand_chacha::ChaCha12Rng;
 use sha2::{Digest, Sha256};
 
-/// Public parameters for Pederson commitments.
+/// Public parameters for Pederson commitment: generators g_1, …, g_n, h
 pub struct PublicParams {
-    /// Generators g_1, …, g_n, h for committing to each m_i
     pub g_h: Vec<EdwardsPoint>,
 }
 
-/// Non-interactive proof for a shuffle of known contents.
 #[derive(Clone)]
 pub struct KnownContentProof {
     pub _c_d: CompressedEdwardsY,
     pub _c_delta: CompressedEdwardsY,
     pub _c_a: CompressedEdwardsY,
     pub f: Vec<Scalar>,
-    pub z: Scalar,
     pub f_delta: Vec<Scalar>,
+    pub z: Scalar,
     pub z_delta: Scalar,
 }
 
@@ -34,6 +37,29 @@ pub struct KnownContentHint {
     pub c_delta: EdwardsPoint,
 }
 
+#[derive(Clone)]
+pub struct AdaptedShuffleProof {
+    pub _c_pi: CompressedEdwardsY,
+    pub _c_d: CompressedEdwardsY,
+    pub _g_d: CompressedEdwardsY,
+    pub _c_z: CompressedEdwardsY,
+    pub _g_u: CompressedEdwardsY,
+    pub _c_u: CompressedEdwardsY,
+    pub x: Vec<Scalar>,
+    pub v: Scalar,
+    pub psi: KnownContentProof,
+}
+
+pub struct AdaptedShuffleHint {
+    pub c_pi: EdwardsPoint,
+    pub c_d: EdwardsPoint,
+    pub d: Vec<Scalar>,
+    pub r_d: Scalar,
+    pub r_pi: Scalar,
+    pub r_z: Scalar,
+    pub u: Scalar,
+}
+
 /// Compute a Pedersen-style commitment: \prod_i g_i^{m_i} * h^r
 #[inline(always)]
 pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
@@ -44,10 +70,9 @@ pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
     EdwardsPoint::vartime_multiscalar_mul(scalars.iter(), pp.g_h.iter())
 }
 
-/// Commitment where messages and randomness are already in vector form
 #[inline(always)]
-pub fn commit_(pp: &PublicParams, m_r: &Vec<Scalar>) -> EdwardsPoint {
-    EdwardsPoint::vartime_multiscalar_mul(m_r.iter(), pp.g_h.iter())
+pub fn commit_empty(pp: &PublicParams, r: &Scalar) -> EdwardsPoint {
+    pp.g_h.last().unwrap() * r
 }
 
 #[inline(always)]
@@ -155,13 +180,14 @@ pub fn prove_shuffle_known(
         _c_delta,
         _c_a,
         f,
-        z,
         f_delta,
+        z,
         z_delta,
     }
 }
 
 /// Verifier: check a non-interactive proof of shuffle known content.
+#[inline(always)]
 pub fn verify_shuffle_known(
     pp: &PublicParams,
     m: &[Scalar],
@@ -227,6 +253,124 @@ pub fn verify_shuffle_known(
     }
 
     true
+}
+
+#[inline(always)]
+fn prove_shuffle_adapted_preprocess(
+    pp: &PublicParams,
+    pi: &[usize],
+    n: usize,
+) -> AdaptedShuffleHint {
+    let mut rng = OsRng;
+    // Sample d, rd, rpi
+    let d: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+    let r_d = Scalar::random(&mut rng);
+    let r_pi = Scalar::random(&mut rng);
+    let r_z = Scalar::random(&mut rng);
+    let u = Scalar::random(&mut rng);
+
+    // Commitments
+    let c_d = commit(pp, &d, &r_d);
+    let c_pi = commit(
+        pp,
+        &pi.iter()
+            .map(|&i| Scalar::from(i as u64))
+            .collect::<Vec<_>>(),
+        &r_pi,
+    );
+
+    AdaptedShuffleHint {
+        c_pi,
+        c_d,
+        d,
+        r_d,
+        r_pi,
+        r_z,
+        u,
+    }
+}
+
+/// Prover: produce the adapted shuffling proof
+#[inline(always)]
+pub fn prove_shuffle_adapted(
+    pp: &PublicParams,
+    pk: &EdwardsPoint, // public key of the verifier, i.e., h in the figure; omit the base point g which is suppoed to be ED25519_BASEPOINT
+    hint: &AdaptedShuffleHint,
+    hint2: &KnownContentHint,
+    g: &[EdwardsPoint],
+    h: &[EdwardsPoint],
+    s: &Scalar,
+    pi: &[usize],
+) -> AdaptedShuffleProof {
+    let n = g.len();
+
+    let g_d = EdwardsPoint::vartime_multiscalar_mul(hint.d.iter(), g.iter());
+
+    let _c_pi = hint.c_pi.compress();
+    let _c_d = hint.c_d.compress();
+    let _g_d = g_d.compress();
+    // Receive challenge z
+    let mut hasher = Sha256::new();
+    hasher.update(pk.compress().as_bytes());
+    for gi in g {
+        hasher.update(gi.compress().as_bytes());
+    }
+    for hi in h {
+        hasher.update(hi.compress().as_bytes());
+    }
+    hasher.update(_c_d.as_bytes());
+    hasher.update(_c_pi.as_bytes());
+    hasher.update(_g_d.as_bytes());
+
+    let hz = hasher.finalize();
+    let mut rng_z = ChaCha12Rng::from_seed(hz.into());
+    let z: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_z)).collect();
+
+    // Compute x_i = s * z_pi(i) + d_i
+    let x: Vec<Scalar> = (0..n).map(|i| s * z[pi[i]] + hint.d[i]).collect();
+    let c_z = commit(pp, &pi.iter().map(|&i| z[i]).collect::<Vec<_>>(), &hint.r_z);
+
+    let g_u = constants::ED25519_BASEPOINT_TABLE * &hint.u;
+    let rd_s_rz = -hint.r_d - hint.r_z * s;
+    let c_u = c_z * hint.u + commit_empty(pp, &rd_s_rz);
+
+    let _c_z = c_z.compress();
+    let _g_u = g_u.compress();
+    let _c_u = c_u.compress();
+
+    // Challenge Delta
+    let mut hasher2 = Sha256::new();
+    for xi in &x {
+        hasher2.update(xi.as_bytes());
+    }
+    hasher2.update(_c_z.as_bytes());
+    hasher2.update(_g_u.as_bytes());
+    hasher2.update(_c_u.as_bytes());
+    hasher2.update(hz);
+
+    let h_delta = hasher2.finalize();
+    let delta = Scalar::from_bytes_mod_order(h_delta.into());
+
+    // Compute v and psi via oracle
+    let v = s * delta + hint.u;
+    let c_rho = c_z + hint.c_pi * delta;
+    let r_rho = hint.r_z + hint.r_pi * delta;
+    let z_pi_delta: Vec<Scalar> = (0..n)
+        .map(|i| z[pi[i]] + delta * Scalar::from(pi[i] as u64))
+        .collect();
+    let psi = prove_shuffle_known(pp, hint2, &z_pi_delta, &c_rho, pi, &r_rho);
+
+    AdaptedShuffleProof {
+        _c_pi,
+        _c_d,
+        _g_d,
+        _c_z,
+        _g_u,
+        _c_u,
+        x,
+        v,
+        psi,
+    }
 }
 
 mod known_content_tests {

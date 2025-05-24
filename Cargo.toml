@@ -7,8 +7,10 @@ edition = "2021"
 curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core", "serde","zeroize"] }
 subtle = "2.4"
 lazy_static = "1.4"
-rand = "0.8"
-sha2 = "0.9"
+rand= {version = "0.8", features = ["small_rng"]}
+rand_chacha = { version = "0.3"}
+sha2 = "0.10.9"
+
 
 [patch.crates-io]
 curve25519-dalek = { path = "./curve25519-dalek" }

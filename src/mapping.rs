@@ -1,12 +1,12 @@
 // Mapping module for efficient field and Montgomery point conversions
-
 use core::ops::Neg;
 use curve25519_dalek::{
     constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
     scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
 use lazy_static::lazy_static;
-use rand::{rngs::OsRng, CryptoRng, RngCore};
+use rand::prelude::*;
+use rand::{rngs::OsRng, RngCore};
 
 // Pre-compute all constants at startup
 lazy_static! {
@@ -143,7 +143,7 @@ pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8
 }
 
 // Performance utilities
-fn generate_dataset<R: RngCore + CryptoRng>(
+fn generate_dataset<R: CryptoRng + RngCore>(
     rng: &mut R,
     n: usize,
 ) -> (Vec<Scalar>, Vec<EdwardsPoint>) {
