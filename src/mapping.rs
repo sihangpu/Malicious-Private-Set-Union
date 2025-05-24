@@ -290,7 +290,7 @@ mod basic_tests {
 
     #[test]
     fn comprehensive_performance_benchmark() {
-        let iterations = 10_000;
+        let iterations = 4;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");

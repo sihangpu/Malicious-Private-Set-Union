@@ -6,9 +6,9 @@ use curve25519_dalek::{
 use rand::{rngs::OsRng, CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 
-/// Public parameters for the shuffle argument.
+/// Public parameters for Pederson commitments.
 pub struct PublicParams {
-    /// Generators g_1, …, g_n for committing to each m_i
+    /// Generators g_1, …, g_n, h for committing to each m_i
     pub g_h: Vec<EdwardsPoint>,
 }
 
@@ -169,7 +169,7 @@ pub fn verify_shuffle_known(
     proof: &KnownContentProof,
 ) -> bool {
     let n = m.len();
-
+    let mut rng = OsRng;
     // Re-derive x using SHA-256
     let mut hasher = Sha256::new();
     hasher.update(c.compress().as_bytes());
@@ -193,15 +193,19 @@ pub fn verify_shuffle_known(
     let c_a = proof._c_a.decompress().unwrap();
 
     // Check multi-commitment equations:
-    let lhs1 = c * e + c_d;
-    let rhs1 = commit(pp, &proof.f, &proof.z);
-    if lhs1 != rhs1 {
-        return false;
-    }
+    let alpha = Scalar::random(&mut rng);
 
-    let lhs2 = c_a * e + c_delta;
-    let rhs2 = commit(pp, &proof.f_delta, &proof.z_delta);
-    if lhs2 != rhs2 {
+    let lhs = (c * e + c_d) * alpha + c_a * e + c_delta;
+    let z_sum = proof.z * alpha + proof.z_delta;
+    // compute the element-wise sum of proof.f and proof.f_delta
+    let f_sum = proof
+        .f
+        .iter()
+        .zip(proof.f_delta.iter())
+        .map(|(f_i, f_delta_i)| alpha * f_i + f_delta_i)
+        .collect::<Vec<_>>();
+    let rhs = commit(pp, &f_sum, &z_sum);
+    if lhs != rhs {
         return false;
     }
 
