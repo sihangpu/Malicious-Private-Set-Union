@@ -1,5 +1,4 @@
-//! Optimized Elligator-2 implementation compatible with curve25519-dalek
-//!
+// Mapping module for efficient field and Montgomery point conversions
 
 use core::ops::Neg;
 use curve25519_dalek::{
@@ -20,7 +19,7 @@ lazy_static! {
     static ref SC_INV_8: Scalar = Scalar::from(8u64).invert();
 }
 
-// Optimized direct mapping with reduced allocations
+// Optimized direct mapping with reduced allocations, based on the direct map of Elligagor 2.
 #[inline(always)]
 pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
     // Pre-compute u² and reuse throughout
@@ -57,7 +56,7 @@ pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
     MontgomeryPoint(x.as_bytes())
 }
 
-// Optimized inverse mapping
+// Optimized inverse mapping, based on the inverse map of Elligagor 2.
 #[inline(always)]
 pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
     let u = FieldElement::from_bytes(&p.to_bytes());
@@ -125,7 +124,7 @@ pub fn mont_points_field_batch(ps: &[MontgomeryPoint]) -> Vec<Option<[FieldEleme
     results
 }
 
-// Cache-friendly representative enumeration
+// Cache-friendly representative enumeration to handle 8-torsion points
 #[inline(always)]
 pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
@@ -144,7 +143,6 @@ pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8
 }
 
 // Performance utilities
-
 fn generate_dataset<R: RngCore + CryptoRng>(
     rng: &mut R,
     n: usize,

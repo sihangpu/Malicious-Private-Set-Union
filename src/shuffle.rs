@@ -1,242 +1,311 @@
-use std::str;
-
 use curve25519_dalek::{
-    constants,
-    edwards::{EdwardsPoint, VartimeEdwardsPrecomputation},
+    edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
-    traits::{Identity, VartimeMultiscalarMul, VartimePrecomputedMultiscalarMul},
+    traits::{Identity, VartimeMultiscalarMul},
 };
-use merlin::Transcript;
 use rand::{rngs::OsRng, CryptoRng, RngCore};
-use rayon::{prelude::*, str::SplitAsciiWhitespace};
-use subtle::{Choice, ConstantTimeEq};
+use sha2::{Digest, Sha256};
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("length mismatch")]
-    Length,
-    #[error("invalid proof")]
-    Invalid,
+/// Public parameters for the shuffle argument.
+pub struct PublicParams {
+    /// Generators g_1, …, g_n for committing to each m_i
+    pub g_h: Vec<EdwardsPoint>,
 }
 
-// Precompute MSM for fixed points
-// Number of random static points to sample (e.g., 2^20)
+/// Non-interactive proof for a shuffle of known contents.
+#[derive(Clone)]
+pub struct KnownContentProof {
+    pub _c_d: CompressedEdwardsY,
+    pub _c_delta: CompressedEdwardsY,
+    pub _c_a: CompressedEdwardsY,
+    pub f: Vec<Scalar>,
+    pub z: Scalar,
+    pub f_delta: Vec<Scalar>,
+    pub z_delta: Scalar,
+}
+
+pub struct KnownContentHint {
+    pub d: Vec<Scalar>,
+    pub delta: Vec<Scalar>,
+    pub r_d: Scalar,
+    pub r_delta: Scalar,
+    pub r_a: Scalar,
+    pub c_d: EdwardsPoint,
+    pub c_delta: EdwardsPoint,
+}
+
+/// Compute a Pedersen-style commitment: \prod_i g_i^{m_i} * h^r
 #[inline(always)]
-fn public_generators(n: u64) -> (VartimeEdwardsPrecomputation, Vec<EdwardsPoint>) {
-    // Parallel sampling of random points using rayon
-    let static_points: Vec<EdwardsPoint> = (0..n)
-        .into_par_iter()
-        .map(|_| {
-            let scalar = Scalar::random(&mut OsRng);
-            &scalar * constants::ED25519_BASEPOINT_TABLE
-        })
+pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
+    let mut scalars = Vec::with_capacity(m.len() + 1);
+    scalars.extend_from_slice(m);
+    scalars.push(*r);
+
+    EdwardsPoint::vartime_multiscalar_mul(scalars.iter(), pp.g_h.iter())
+}
+
+/// Commitment where messages and randomness are already in vector form
+#[inline(always)]
+pub fn commit_(pp: &PublicParams, m_r: &Vec<Scalar>) -> EdwardsPoint {
+    EdwardsPoint::vartime_multiscalar_mul(m_r.iter(), pp.g_h.iter())
+}
+
+#[inline(always)]
+fn prove_shuffle_known_preprocess(pp: &PublicParams, n: usize) -> KnownContentHint {
+    let mut rng = OsRng;
+    // Prover picks random d_i, r_d, Delta_i, r_Delta, a_i, r_a
+    let d: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+    let r_d = Scalar::random(&mut rng);
+    let r_delta = Scalar::random(&mut rng);
+    let mut delta = vec![Scalar::ZERO; n];
+    delta[0] = d[0];
+    for i in 1..n - 1 {
+        delta[i] = Scalar::random(&mut rng);
+    }
+    delta[n - 1] = Scalar::ZERO;
+    let r_a = Scalar::random(&mut rng);
+
+    let c_d = commit(pp, &d, &r_d);
+    let mut d2: Vec<Scalar> = vec![Scalar::ZERO; n];
+    for i in 0..n - 1 {
+        d2[i] = -delta[i] * d[i + 1]
+    }
+    let c_delta = commit(pp, &d2, &r_delta);
+
+    KnownContentHint {
+        d,
+        delta,
+        r_d,
+        r_delta,
+        r_a,
+        c_d,
+        c_delta,
+    }
+}
+
+/// Prover: produce a non-interactive proof of correct shuffle of known m[0..n).
+/// `c` must be a commitment to m[pi[i]] under randomness `r`.
+#[inline(always)]
+pub fn prove_shuffle_known(
+    pp: &PublicParams,
+    hint: &KnownContentHint,
+    m: &[Scalar],
+    c: &EdwardsPoint,
+    pi: &[usize], //permutation indices: pi[i] = j means m[i] is at position j in the original list
+    r: &Scalar,
+) -> KnownContentProof {
+    let n = m.len();
+
+    // Derive x deterministically: hash of public data using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(c.compress().as_bytes());
+    for mi in m {
+        hasher.update(mi.as_bytes());
+    }
+    let hx = hasher.finalize();
+    let x = Scalar::from_bytes_mod_order(hx.into());
+
+    // a_i = \prod_{j=1..i} (m_{pi(j)} - x)
+    let mut a = Vec::with_capacity(n);
+    let mut acc = Scalar::ONE;
+    for &j in pi.iter() {
+        acc *= m[j] - x;
+        a.push(acc);
+    }
+
+    // Compute commitments c_a
+    let mut a2: Vec<Scalar> = vec![Scalar::ZERO; n];
+    for i in 0..n - 1 {
+        a2[i] = hint.delta[i + 1] - (m[pi[i + 1]] - x) * hint.delta[i] - a[i] * hint.d[i + 1];
+    }
+    let c_a = commit(pp, &a2, &hint.r_a);
+
+    // Derive challenge e from c_d, c_delta,ca, and hx
+    let mut haher2 = Sha256::new();
+    let _c_d = hint.c_d.compress();
+    let _c_delta = hint.c_delta.compress();
+    let _c_a = c_a.compress();
+    haher2.update(_c_d.as_bytes());
+    haher2.update(_c_delta.as_bytes());
+    haher2.update(_c_a.as_bytes());
+    haher2.update(hx);
+
+    let he = haher2.finalize();
+    let e = Scalar::from_bytes_mod_order(he.into());
+
+    // Compute responses f_i = e*m_{pi(i)} + d_i, z = e*r + r_d
+    let f: Vec<Scalar> = pi
+        .iter()
+        .enumerate()
+        .map(|(i, &j)| e * m[j] + hint.d[i])
         .collect();
-    // Perform variable-time precomputation
-    let pederson = VartimePrecomputedMultiscalarMul::new(static_points.iter());
-    println!("Precomputation complete for {} base points.", n);
-    (pederson, static_points)
+    let z = e * r + hint.r_d;
+
+    // Compute f_delta and z_delta
+    let mut f_delta: Vec<Scalar> = vec![Scalar::ZERO; n];
+    for i in 0..n - 1 {
+        f_delta[i] = e
+            * (hint.delta[i + 1] - (m[pi[i + 1]] - x) * hint.delta[i] - a[i] * hint.d[i + 1])
+            - hint.delta[i] * hint.d[i + 1]
+    }
+    let z_delta = e * hint.r_a + hint.r_delta;
+
+    KnownContentProof {
+        _c_d,
+        _c_delta,
+        _c_a,
+        f,
+        z,
+        f_delta,
+        z_delta,
+    }
 }
 
-/// Batched Pedersen commitments *C = \sum_i m_i . G_i + r·H*.
-#[inline(always)]
-fn commit(m_r: &mut Vec<Scalar>, bases: &VartimeEdwardsPrecomputation) -> EdwardsPoint {
-    bases.vartime_multiscalar_mul(m_r.iter())
+/// Verifier: check a non-interactive proof of shuffle known content.
+pub fn verify_shuffle_known(
+    pp: &PublicParams,
+    m: &[Scalar],
+    c: &EdwardsPoint,
+    proof: &KnownContentProof,
+) -> bool {
+    let n = m.len();
+
+    // Re-derive x using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(c.compress().as_bytes());
+    for mi in m {
+        hasher.update(mi.as_bytes());
+    }
+    let hx = hasher.finalize();
+    let x = Scalar::from_bytes_mod_order(hx.into());
+
+    // Re-derive e
+    let mut hasher2 = Sha256::new();
+    hasher2.update(proof._c_d.as_bytes());
+    hasher2.update(proof._c_delta.as_bytes());
+    hasher2.update(proof._c_a.as_bytes());
+    hasher2.update(hx);
+    let he = hasher2.finalize();
+    let e = Scalar::from_bytes_mod_order(he.into());
+
+    let c_d = proof._c_d.decompress().unwrap();
+    let c_delta = proof._c_delta.decompress().unwrap();
+    let c_a = proof._c_a.decompress().unwrap();
+
+    // Check multi-commitment equations:
+    let lhs1 = c * e + c_d;
+    let rhs1 = commit(pp, &proof.f, &proof.z);
+    if lhs1 != rhs1 {
+        return false;
+    }
+
+    let lhs2 = c_a * e + c_delta;
+    let rhs2 = commit(pp, &proof.f_delta, &proof.z_delta);
+    if lhs2 != rhs2 {
+        return false;
+    }
+
+    // Recompute F_i recursively and check final equality
+    let mut F = proof.f[0] - e * x;
+    let e_inv = e.invert();
+    for i in 1..n {
+        let exp = proof.f[i] - e * x;
+        let tmp = F * exp + proof.f_delta[i - 1];
+        F = tmp * e_inv;
+    }
+    let mut prod = Scalar::ONE;
+    for mi in m {
+        prod *= *mi - x;
+    }
+
+    if F != e * prod {
+        return false;
+    }
+
+    true
 }
 
-#[test]
-fn pre_msm_correctness_test() {
-    let n = 1_00; // Number of points to sample
-    let (pederson, bases) = public_generators(n);
-    let scalars: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
-    let point_slow = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases);
-    let point_fast = pederson.vartime_multiscalar_mul(scalars.iter());
+mod known_content_tests {
+    use super::*;
+    use rand::seq::SliceRandom;
 
-    assert!(point_fast == point_slow, "Points do not match!");
+    fn setup_params(n: usize) -> PublicParams {
+        let mut rng = OsRng;
+        let g_h: Vec<EdwardsPoint> = (0..n + 1)
+            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+            .collect();
+        PublicParams { g_h }
+    }
+
+    /// Test that a correct shuffle verifies and a tampered proof fails.
+    #[test]
+    fn test_correctness_and_tamper() {
+        let n = 100;
+        let pp = setup_params(n);
+        let mut rng = OsRng;
+
+        // Original messages m
+        let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+        // Random permutation pi
+        let mut pi: Vec<usize> = (0..n).collect();
+
+        pi.shuffle(&mut rng);
+
+        // Commitment to shuffled m under randomness r
+        let r = Scalar::random(&mut rng);
+        let m_shuffled: Vec<Scalar> = pi.iter().map(|&i| m[i]).collect();
+        let c = commit(&pp, &m_shuffled, &r);
+
+        // Prove and verify
+        let hint = prove_shuffle_known_preprocess(&pp, n);
+        let proof: KnownContentProof = prove_shuffle_known(&pp, &hint, &m, &c, &pi, &r);
+
+        assert!(
+            verify_shuffle_known(&pp, &m, &c, &proof),
+            "Valid proof should verify"
+        );
+
+        // Tamper: flip one scalar in f
+        let mut proof_bad = proof.clone();
+        proof_bad.f[0] += Scalar::ONE;
+        assert!(
+            !verify_shuffle_known(&pp, &m, &c, &proof_bad),
+            "Tampered proof should fail"
+        );
+    }
+
+    #[test]
+    fn performance_test() {
+        use std::time::Instant;
+
+        let n = 10_000;
+
+        let pp = setup_params(n);
+        let mut rng = OsRng;
+        let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+        let mut pi: Vec<usize> = (0..n).collect();
+        pi.shuffle(&mut rng);
+
+        // Commitment to shuffled m under randomness r
+        let r = Scalar::random(&mut rng);
+        let m_shuffled: Vec<Scalar> = pi.iter().map(|&i| m[i]).collect();
+        let c = commit(&pp, &m_shuffled, &r);
+
+        // Prove and verify
+        let hint = prove_shuffle_known_preprocess(&pp, n);
+
+        let start = Instant::now();
+        let proof: KnownContentProof = prove_shuffle_known(&pp, &hint, &m, &c, &pi, &r);
+        let prooftime = start.elapsed();
+
+        let start = Instant::now();
+        let _ = verify_shuffle_known(&pp, &m, &c, &proof);
+        let verifytime = start.elapsed();
+
+        println!(
+            "For each message, Proof time: {:.2} us , Verify time: {:.2} us",
+            prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
+            verifytime.as_secs_f64() / n as f64 * 1_000_000f64
+        );
+    }
 }
-
-#[test]
-fn pre_msm_benchmark_test() {
-    use std::time::Instant;
-    let n = 1_000; // Number of points to sample
-
-    let start = Instant::now();
-    let (pederson, bases) = public_generators(n);
-    let preprocess_duration = start.elapsed();
-
-    let scalars: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
-
-    let start = Instant::now();
-    let point_fast = pederson.vartime_multiscalar_mul(scalars.iter());
-    let fast_duration = start.elapsed();
-
-    let strart = Instant::now();
-    let point_slow = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases);
-    let slow_duration = strart.elapsed();
-
-    assert!(point_fast == point_slow, "Points do not match!");
-
-    println!(
-        "Preprocessing time: {:?}, Slow MSM time: {:?}, Fast MSM time: {:?}",
-        preprocess_duration, slow_duration, fast_duration
-    );
-}
-
-// /// Transcript helper → scalar challenge in ℤ_q.
-// fn challenge_scalar(t: &mut Transcript, label: &'static [u8]) -> Scalar {
-//     let mut buf = [0u8; 64];
-//     t.challenge_bytes(label, &mut buf);
-//     Scalar::from_bytes_mod_order_wide(&buf)
-// }
-
-// /// Vectors returned to the verifier alongside the proof (shuffled order).
-// pub struct ShuffledVectors {
-//     pub g_i: Vec<EdwardsPoint>,
-//     pub h_i: Vec<EdwardsPoint>,
-// }
-
-// /// Non‑interactive proof object (Fiat–Shamir compressed).
-// #[derive(Clone)]
-// pub struct Proof {
-//     pub c_pi: EdwardsPoint,
-//     pub c_d: EdwardsPoint,
-//     pub g_d: EdwardsPoint,
-//     pub x: Vec<Scalar>,
-//     pub c_z: EdwardsPoint,
-//     pub g_u: EdwardsPoint,
-//     pub c_u: EdwardsPoint,
-//     pub v: Scalar,
-//     pub psi: EdwardsPoint, // placeholder for internal shuffle proof
-// }
-
-// /// Container for secret randomness used inside the prover (omitted once built).
-// struct Secrets {
-//     d: Vec<Scalar>,
-//     r_d: Scalar,
-//     pi: Vec<usize>,
-//     r_pi: Scalar,
-//     z: Vec<Scalar>,
-//     r_z: Scalar,
-//     u: Scalar,
-// }
-
-// pub struct Prover;
-// impl Prover {
-//     /// Produce a shuffle proof and the shuffled vectors.
-//     pub fn prove<R: RngCore + CryptoRng>(
-//         g_i: &[EdwardsPoint],
-//         h_i: &[EdwardsPoint],
-//         s: Scalar,
-//         mut rng: R,
-//     ) -> Result<(Proof, ShuffledVectors), Error> {
-//         let n = g_i.len();
-//         if n != h_i.len() {
-//             return Err(Error::Length);
-//         }
-
-//         // --- Step 1: choose permutation π and randomness dᵢ ------------------
-//         let mut pi: Vec<usize> = (0..n).collect();
-//         // Fisher‑Yates shuffle
-//         for i in (1..n).rev() {
-//             let j = (rng.next_u32() as usize) % (i + 1);
-//             pi.swap(i, j);
-//         }
-//         let d: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
-//         let r_d = Scalar::random(&mut rng);
-//         let r_pi = Scalar::random(&mut rng);
-
-//         let c_d = commit(&d.iter().sum(), &r_d); // simplified vector commitment
-//         let c_pi = commit(&Scalar::zero(), &r_pi); // placeholder; permutation is bound via transcript
-//                                                    // G_d = Σ g_i·d_i
-//         let g_d = EdwardsPoint::multiscalar_mul(&d, g_i);
-
-//         // Transcript initial state
-//         let mut transcript = Transcript::new(b"Groth10ShuffleEdwards");
-//         transcript.append_message(b"commit_cd", c_d.compress().as_bytes());
-//         transcript.append_message(b"commit_cpi", c_pi.compress().as_bytes());
-//         transcript.append_message(b"Gd", g_d.compress().as_bytes());
-
-//         // --- Step 3: derive zᵢ via Fiat–Shamir -------------------------------
-//         let z: Vec<Scalar> = (0..n)
-//             .map(|i| challenge_scalar(&mut transcript, &[b'z', i as u8]))
-//             .collect();
-//         let r_z = Scalar::random(&mut rng);
-//         let c_z = commit(&z.iter().sum(), &r_z);
-
-//         // --- Step 5: compute xᵢ = s·z_{π(i)} + dᵢ ---------------------------
-//         let x: Vec<Scalar> = (0..n).map(|i| s * z[pi[i]] + d[i]).collect();
-//         for xi in &x {
-//             transcript.append_message(b"x_i", xi.as_bytes());
-//         }
-//         transcript.append_message(b"commit_cz", c_z.compress().as_bytes());
-
-//         // --- Step 6: derive Δ ----------------------------------------------
-//         let delta = challenge_scalar(&mut transcript, b"delta");
-
-//         // --- Step 7: expose v = Δ·s + u and auxiliary commitments -----------
-//         let u = Scalar::random(&mut rng);
-//         let v = delta * s + u;
-//         let psi = commit(&Scalar::zero(), &Scalar::random(&mut rng)); // placeholder
-//         let g_u = G * u;
-//         let c_u = commit(&z.iter().sum(), &(v - s * delta)); // simplified relation
-
-//         // Shuffled outputs for verifier
-//         let shuffled_g: Vec<EdwardsPoint> = pi.iter().map(|&i| g_i[i]).collect();
-//         let shuffled_h: Vec<EdwardsPoint> = pi.iter().map(|&i| h_i[i]).collect();
-
-//         Ok((
-//             Proof {
-//                 c_pi,
-//                 c_d,
-//                 g_d,
-//                 x,
-//                 c_z,
-//                 g_u,
-//                 c_u,
-//                 v,
-//                 psi,
-//             },
-//             ShuffledVectors {
-//                 g_i: shuffled_g,
-//                 h_i: shuffled_h,
-//             },
-//         ))
-//     }
-// }
-
-// pub struct Verifier;
-// impl Verifier {
-//     pub fn verify(g_i: &[EdwardsPoint], h_i: &[EdwardsPoint], proof: &Proof) -> Result<(), Error> {
-//         let n = g_i.len();
-//         if n == 0 || h_i.len() != n || proof.x.len() != n {
-//             return Err(Error::Length);
-//         }
-
-//         // Reconstruct transcript to obtain the same challenges.
-//         let mut transcript = Transcript::new(b"Groth10ShuffleEdwards");
-//         transcript.append_message(b"commit_cd", proof.c_d.compress().as_bytes());
-//         transcript.append_message(b"commit_cpi", proof.c_pi.compress().as_bytes());
-//         transcript.append_message(b"Gd", proof.g_d.compress().as_bytes());
-//         let z: Vec<Scalar> = (0..n)
-//             .map(|i| challenge_scalar(&mut transcript, &[b'z', i as u8]))
-//             .collect();
-//         transcript.append_message(b"commit_cz", proof.c_z.compress().as_bytes());
-//         for xi in &proof.x {
-//             transcript.append_message(b"x_i", xi.as_bytes());
-//         }
-//         let delta = challenge_scalar(&mut transcript, b"delta");
-
-//         // Basic commitment relation (abridged — full Groth10 checks omitted).
-//         let lhs = proof.c_d + (proof.c_pi * delta); // placeholder relation
-//         let rhs = commit(&proof.x.iter().copied().sum(), &Scalar::zero()) + proof.c_z;
-//         if lhs.ct_eq(&rhs).unwrap_u8() == 0 {
-//             return Err(Error::Invalid);
-//         }
-//         Ok(())
-//     }
-// }
-
-// /// Generate a random prime‑order Edwards point.
-// #[inline]
-// pub fn random_point<R: RngCore + CryptoRng>(mut rng: R) -> EdwardsPoint {
-//     G * Scalar::random(&mut rng)
-// }
