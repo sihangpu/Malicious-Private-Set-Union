@@ -1,23 +1,85 @@
-// use curve25519_dalek::{constants, edwards::EdwardsPoint, scalar::Scalar, traits::MultiscalarMul};
-// use merlin::Transcript;
-// use rand::{CryptoRng, RngCore};
-// use subtle::{Choice, ConstantTimeEq};
+use std::str;
 
-// #[derive(thiserror::Error, Debug)]
-// pub enum Error {
-//     #[error("length mismatch")]
-//     Length,
-//     #[error("invalid proof")]
-//     Invalid,
-// }
+use curve25519_dalek::{
+    constants,
+    edwards::{EdwardsPoint, VartimeEdwardsPrecomputation},
+    scalar::Scalar,
+    traits::{Identity, VartimeMultiscalarMul, VartimePrecomputedMultiscalarMul},
+};
+use merlin::Transcript;
+use rand::{rngs::OsRng, CryptoRng, RngCore};
+use rayon::{prelude::*, str::SplitAsciiWhitespace};
+use subtle::{Choice, ConstantTimeEq};
 
-// // Precompute MSM for fixed points
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("length mismatch")]
+    Length,
+    #[error("invalid proof")]
+    Invalid,
+}
 
-// /// Batched Pedersen commitments *C = \sum_i m_i G_i + r·H*.
-// #[inline(always)]
-// fn commit(mvec_r: &Vec<Scalar>, n: u32) -> EdwardsPoint {
-//     constants::ED25519_BASEPOINT_TABLE * m + H * r
-// }
+// Precompute MSM for fixed points
+// Number of random static points to sample (e.g., 2^20)
+#[inline(always)]
+fn public_generators(n: u64) -> (VartimeEdwardsPrecomputation, Vec<EdwardsPoint>) {
+    // Parallel sampling of random points using rayon
+    let static_points: Vec<EdwardsPoint> = (0..n)
+        .into_par_iter()
+        .map(|_| {
+            let scalar = Scalar::random(&mut OsRng);
+            &scalar * constants::ED25519_BASEPOINT_TABLE
+        })
+        .collect();
+    // Perform variable-time precomputation
+    let pederson = VartimePrecomputedMultiscalarMul::new(static_points.iter());
+    println!("Precomputation complete for {} base points.", n);
+    (pederson, static_points)
+}
+
+/// Batched Pedersen commitments *C = \sum_i m_i . G_i + r·H*.
+#[inline(always)]
+fn commit(m_r: &mut Vec<Scalar>, bases: &VartimeEdwardsPrecomputation) -> EdwardsPoint {
+    bases.vartime_multiscalar_mul(m_r.iter())
+}
+
+#[test]
+fn pre_msm_correctness_test() {
+    let n = 1_00; // Number of points to sample
+    let (pederson, bases) = public_generators(n);
+    let scalars: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+    let point_slow = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases);
+    let point_fast = pederson.vartime_multiscalar_mul(scalars.iter());
+
+    assert!(point_fast == point_slow, "Points do not match!");
+}
+
+#[test]
+fn pre_msm_benchmark_test() {
+    use std::time::Instant;
+    let n = 1_000; // Number of points to sample
+
+    let start = Instant::now();
+    let (pederson, bases) = public_generators(n);
+    let preprocess_duration = start.elapsed();
+
+    let scalars: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+
+    let start = Instant::now();
+    let point_fast = pederson.vartime_multiscalar_mul(scalars.iter());
+    let fast_duration = start.elapsed();
+
+    let strart = Instant::now();
+    let point_slow = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases);
+    let slow_duration = strart.elapsed();
+
+    assert!(point_fast == point_slow, "Points do not match!");
+
+    println!(
+        "Preprocessing time: {:?}, Slow MSM time: {:?}, Fast MSM time: {:?}",
+        preprocess_duration, slow_duration, fast_duration
+    );
+}
 
 // /// Transcript helper → scalar challenge in ℤ_q.
 // fn challenge_scalar(t: &mut Transcript, label: &'static [u8]) -> Scalar {

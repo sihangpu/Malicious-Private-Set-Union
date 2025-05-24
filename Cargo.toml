@@ -10,6 +10,7 @@ lazy_static = "1.4"
 rand = "0.8"
 merlin            = "3"
 thiserror         = "1"
+rayon = "1.7"
 
 [patch.crates-io]
 curve25519-dalek = { path = "./curve25519-dalek" }
