@@ -10,8 +10,8 @@ lazy_static = "1.4"
 rand= {version = "0.8", features = ["small_rng"]}
 rand_chacha = "0.3"
 blake2 = "0.10.5"
-sha2 = "0.10.5"
 itertools = "0.10.5"
+aes    = { version = "0.8", features = ["aes-ni"] }
 
 
 [patch.crates-io]

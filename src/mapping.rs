@@ -8,6 +8,9 @@ use lazy_static::lazy_static;
 use rand::prelude::*;
 use rand::{rngs::OsRng, RngCore};
 
+use aes::Aes128;
+use cipher::{generic_array::GenericArray, BlockCipher, KeyInit};
+
 // Pre-compute all constants at startup
 lazy_static! {
     static ref FE_A: FieldElement = FieldElement::from_limbs([486_662, 0, 0, 0, 0]);
@@ -140,6 +143,78 @@ pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8
     reps[7] = *p + constants::EIGHT_TORSION[7];
 
     reps
+}
+
+/// Encrypt a 256-bit block in‐place under AES-128 Feistel.
+/// `data` is 32 bytes; `master` is the 16-byte AES key.
+fn feistel_prp256(data: &mut [u8; 32], master: &[u8; 16]) {
+    // Split into two 16-byte halves
+    let (mut l, mut r) = data.split_at_mut(16);
+    // Initialize AES-128
+    let aes = Aes128::new(GenericArray::from_slice(master));
+
+    // Four rounds is plenty (Luby–Rackoff gives full PRP at 3 rounds)
+    for round in 1u8..=3 {
+        // Derive subkey Ki = AES(master, [round || 0..0])
+        let mut rc = [0u8; 16];
+        rc[0] = round;
+        let mut ki = GenericArray::clone_from_slice(&rc);
+        aes.encrypt_block(&mut ki);
+
+        // F = AES_{Ki}(R)
+        let mut f = GenericArray::clone_from_slice(r);
+        // XOR pre‐whiten: f = AES_{Ki}( R XOR Ki )
+        for i in 0..16 {
+            f[i] ^= ki[i]
+        }
+        aes.encrypt_block(&mut f);
+
+        // Feistel swap
+        for i in 0..16 {
+            let tmp = l[i] ^ f[i];
+            l[i] = r[i];
+            r[i] = tmp;
+        }
+    }
+}
+
+/// Decrypt a 256-bit block in-place that was encrypted with feistel_prp256.
+/// `data` is 32 bytes; `master` is the 16-byte AES key.
+fn feistel_prp256_inv(data: &mut [u8; 32], master: &[u8; 16]) {
+    // Split into two 16-byte halves
+    let (mut l, mut r) = data.split_at_mut(16);
+    // Initialize AES-128
+    let aes = Aes128::new(GenericArray::from_slice(master));
+
+    // Four rounds in reverse
+    for round in (1u8..=3).rev() {
+        // Derive subkey Ki = AES(master, [round || 0..0])
+        let mut rc = [0u8; 16];
+        rc[0] = round;
+        let mut ki = GenericArray::clone_from_slice(&rc);
+        aes.encrypt_block(&mut ki);
+
+        // F = AES_{Ki}( L ) with the same whitening trick
+        let mut f = GenericArray::clone_from_slice(l);
+        for i in 0..16 {
+            f[i] ^= ki[i]
+        }
+        aes.encrypt_block(&mut f);
+
+        // Inverse Feistel:
+        //   R_prev = L_curr
+        //   L_prev = R_curr ⊕ F
+        let mut prev_r = [0u8; 16];
+        let mut prev_l = [0u8; 16];
+        prev_r.copy_from_slice(l);
+        for i in 0..16 {
+            prev_l[i] = r[i] ^ f[i];
+        }
+
+        // Write back for next iteration
+        l.copy_from_slice(&prev_l);
+        r.copy_from_slice(&prev_r);
+    }
 }
 
 // Performance utilities
