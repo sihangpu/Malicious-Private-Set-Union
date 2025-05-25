@@ -71,12 +71,6 @@ pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
 }
 
 #[inline(always)]
-pub fn commit_empty(pp: &PublicParams, r: &Scalar) -> EdwardsPoint {
-    // pp.g_h.last().unwrap() * r
-    EdwardsPoint::mul_base(r)
-}
-
-#[inline(always)]
 pub fn commit_determ(pp: &PublicParams, m: &[Scalar]) -> EdwardsPoint {
     // let g = pp.g_h[..pp.g_h.len() - 1].iter();
     // EdwardsPoint::vartime_multiscalar_mul(m.iter(), g)
@@ -482,7 +476,6 @@ pub fn verify_shuffle_adapted(
 
 mod known_content_tests {
     use super::*;
-    use rand::seq::SliceRandom;
 
     fn setup_params(n: usize) -> PublicParams {
         let mut rng = OsRng;
@@ -492,45 +485,8 @@ mod known_content_tests {
         PublicParams { f }
     }
 
-    /// Test that a correct shuffle verifies and a tampered proof fails.
     #[test]
-    fn test_correctness_and_tamper() {
-        let n = 100;
-        let pp = setup_params(n);
-        let mut rng = OsRng;
-
-        // Original messages m
-        let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
-        // Random permutation pi
-        let (pi, _) = random_permutation(n);
-
-        // pi.shuffle(&mut rng);
-
-        // Commitment to shuffled m under randomness r
-        let r = Scalar::random(&mut rng);
-        let m_shuffled: Vec<Scalar> = pi.iter().map(|&i| m[i]).collect();
-        let c = commit(&pp, &m_shuffled, &r);
-
-        // Prove and verify
-        let hint = prove_shuffle_known_preprocess(&pp, n);
-        let proof: KnownContentProof = prove_shuffle_known(&pp, &hint, &m, &c, &pi, &r);
-
-        assert!(
-            verify_shuffle_known(&pp, &m, &c, &proof),
-            "Valid proof should verify"
-        );
-
-        // Tamper: flip one scalar in f
-        let mut proof_bad = proof.clone();
-        proof_bad.f[0] += Scalar::ONE;
-        assert!(
-            !verify_shuffle_known(&pp, &m, &c, &proof_bad),
-            "Tampered proof should fail"
-        );
-    }
-
-    #[test]
-    fn performance_test() {
+    fn shuffle_known_content_test() {
         use std::time::Instant;
 
         let n = 10_000;
@@ -554,11 +510,21 @@ mod known_content_tests {
         let prooftime = start.elapsed();
 
         let start = Instant::now();
-        let _ = verify_shuffle_known(&pp, &m, &c, &proof);
+        let result = verify_shuffle_known(&pp, &m, &c, &proof);
         let verifytime = start.elapsed();
 
+        assert!(result, "Valid proof should verify");
+
+        // Tamper: flip one scalar in f
+        let mut proof_bad = proof.clone();
+        proof_bad.f[0] += Scalar::ONE;
+        assert!(
+            !verify_shuffle_known(&pp, &m, &c, &proof_bad),
+            "Tampered proof should fail"
+        );
+
         println!(
-            "For each message, Proof time: {:.2} us , Verify time: {:.2} us",
+            "Known content aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
@@ -567,7 +533,6 @@ mod known_content_tests {
 
 mod adapted_shuffle_tests {
     use super::*;
-    use rand::seq::SliceRandom;
 
     fn setup_params(n: usize) -> PublicParams {
         let mut rng = OsRng;
@@ -577,8 +542,10 @@ mod adapted_shuffle_tests {
         PublicParams { f }
     }
     #[test]
-    fn test_adapted_shuffle_correctness() {
-        let n = 100;
+    fn test_adapted_shuffle() {
+        use std::time::Instant;
+        let n = 10_000;
+
         let pp = setup_params(n);
         let mut rng = OsRng;
 
@@ -596,12 +563,21 @@ mod adapted_shuffle_tests {
 
         // Prove and verify
         let hint = prove_shuffle_adapted_preprocess(&pp, &pi, n);
+
+        let start = Instant::now();
         let proof: AdaptedShuffleProof =
             prove_shuffle_adapted(&pp, &pk, &hint, &m, &m_shuffled, &s, &pi);
+        let prooftime = start.elapsed();
 
-        assert!(
-            verify_shuffle_adapted(&pp, &pk, &m, &m_shuffled, &proof),
-            "Valid proof should verify"
+        let start = Instant::now();
+        let result = verify_shuffle_adapted(&pp, &pk, &m, &m_shuffled, &proof);
+        let verifytime = start.elapsed();
+        assert!(result, "Valid proof should verify");
+
+        println!(
+            "Adapted shuffle aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
+            verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
     }
 }
