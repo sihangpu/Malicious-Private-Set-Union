@@ -212,7 +212,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     // Bechmark Edwards fixed-base scalar multiplication
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = constants::ED25519_BASEPOINT_TABLE * &*SC_INV_8;
+        let _ = EdwardsPoint::mul_base(&*SC_INV_8);
     }
     let ed_fixed_base_time = start.elapsed();
 
@@ -290,7 +290,7 @@ mod basic_tests {
 
     #[test]
     fn comprehensive_performance_benchmark() {
-        let iterations = 4;
+        let iterations = 10_000;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");

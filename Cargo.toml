@@ -8,7 +8,7 @@ curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tabl
 subtle = "2.4"
 lazy_static = "1.4"
 rand= {version = "0.8", features = ["small_rng"]}
-rand_chacha = { version = "0.3"}
+rand_chacha = "0.3"
 sha2 = "0.10.9"
 
 
@@ -31,8 +31,13 @@ opt-level = 3
 
 
 [profile.dev]
-opt-level = 3        # Some optimization for reasonable test performance
-
+opt-level = 3      
+debug = false
+strip = true
+lto = "fat"          # Full link-time optimization
+codegen-units = 1    # Better optimization but slower compile
+panic = "abort"      # Smaller binary, faster code
+overflow-checks = false
 
 [profile.bench]
 inherits = "release"

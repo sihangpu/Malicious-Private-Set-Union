@@ -1,7 +1,4 @@
-use std::hint;
-
 use curve25519_dalek::{
-    constants,
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
     traits::VartimeMultiscalarMul,
@@ -11,9 +8,9 @@ use rand::rngs::OsRng;
 use rand_chacha::ChaCha12Rng;
 use sha2::{Digest, Sha256};
 
-/// Public parameters for Pederson commitment: generators g_1, …, g_n, h
+/// Public parameters for Pederson commitment: generators g,f_1, …, f_n
 pub struct PublicParams {
-    pub g_h: Vec<EdwardsPoint>,
+    pub f: Vec<EdwardsPoint>,
 }
 
 #[derive(Clone)]
@@ -47,6 +44,7 @@ pub struct AdaptedShuffleProof {
     pub _c_u: CompressedEdwardsY,
     pub x: Vec<Scalar>,
     pub v: Scalar,
+    pub v2: Scalar,
     pub psi: KnownContentProof,
 }
 
@@ -58,21 +56,52 @@ pub struct AdaptedShuffleHint {
     pub r_pi: Scalar,
     pub r_z: Scalar,
     pub u: Scalar,
+    pub u2: Scalar,
+    pub hint2: KnownContentHint,
 }
 
 /// Compute a Pedersen-style commitment: \prod_i g_i^{m_i} * h^r
 #[inline(always)]
 pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
-    let mut scalars = Vec::with_capacity(m.len() + 1);
-    scalars.extend_from_slice(m);
-    scalars.push(*r);
+    // let mut scalars = Vec::with_capacity(m.len() + 1);
+    // scalars.extend_from_slice(m);
+    // scalars.push(*r);
 
-    EdwardsPoint::vartime_multiscalar_mul(scalars.iter(), pp.g_h.iter())
+    EdwardsPoint::vartime_multiscalar_mul(m.iter(), pp.f.iter()) + EdwardsPoint::mul_base(r)
 }
 
 #[inline(always)]
 pub fn commit_empty(pp: &PublicParams, r: &Scalar) -> EdwardsPoint {
-    pp.g_h.last().unwrap() * r
+    // pp.g_h.last().unwrap() * r
+    EdwardsPoint::mul_base(r)
+}
+
+#[inline(always)]
+pub fn commit_determ(pp: &PublicParams, m: &[Scalar]) -> EdwardsPoint {
+    // let g = pp.g_h[..pp.g_h.len() - 1].iter();
+    // EdwardsPoint::vartime_multiscalar_mul(m.iter(), g)
+    EdwardsPoint::vartime_multiscalar_mul(m.iter(), pp.f.iter())
+}
+
+#[inline(always)]
+fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
+    let mut rng = thread_rng();
+
+    // Start with the identity permutation.
+    let mut perm: Vec<usize> = (0..n).collect();
+    let mut inv: Vec<usize> = (0..n).collect();
+
+    // Fisher–Yates, but keep `inv` in sync as we swap.
+    for i in (1..n).rev() {
+        let j = rng.gen_range(0..=i);
+        perm.swap(i, j);
+
+        // After swapping perm[i]↔perm[j], update their inverse positions:
+        inv[perm[i]] = i;
+        inv[perm[j]] = j;
+    }
+
+    (perm, inv)
 }
 
 #[inline(always)]
@@ -268,6 +297,7 @@ fn prove_shuffle_adapted_preprocess(
     let r_pi = Scalar::random(&mut rng);
     let r_z = Scalar::random(&mut rng);
     let u = Scalar::random(&mut rng);
+    let u2 = Scalar::random(&mut rng);
 
     // Commitments
     let c_d = commit(pp, &d, &r_d);
@@ -279,6 +309,7 @@ fn prove_shuffle_adapted_preprocess(
         &r_pi,
     );
 
+    let hint2 = prove_shuffle_known_preprocess(pp, n);
     AdaptedShuffleHint {
         c_pi,
         c_d,
@@ -287,6 +318,8 @@ fn prove_shuffle_adapted_preprocess(
         r_pi,
         r_z,
         u,
+        u2,
+        hint2,
     }
 }
 
@@ -296,7 +329,6 @@ pub fn prove_shuffle_adapted(
     pp: &PublicParams,
     pk: &EdwardsPoint, // public key of the verifier, i.e., h in the figure; omit the base point g which is suppoed to be ED25519_BASEPOINT
     hint: &AdaptedShuffleHint,
-    hint2: &KnownContentHint,
     g: &[EdwardsPoint],
     h: &[EdwardsPoint],
     s: &Scalar,
@@ -318,8 +350,8 @@ pub fn prove_shuffle_adapted(
     for hi in h {
         hasher.update(hi.compress().as_bytes());
     }
-    hasher.update(_c_d.as_bytes());
     hasher.update(_c_pi.as_bytes());
+    hasher.update(_c_d.as_bytes());
     hasher.update(_g_d.as_bytes());
 
     let hz = hasher.finalize();
@@ -330,9 +362,8 @@ pub fn prove_shuffle_adapted(
     let x: Vec<Scalar> = (0..n).map(|i| s * z[pi[i]] + hint.d[i]).collect();
     let c_z = commit(pp, &pi.iter().map(|&i| z[i]).collect::<Vec<_>>(), &hint.r_z);
 
-    let g_u = constants::ED25519_BASEPOINT_TABLE * &hint.u;
-    let rd_s_rz = -hint.r_d - hint.r_z * s;
-    let c_u = c_z * hint.u + commit_empty(pp, &rd_s_rz);
+    let g_u = EdwardsPoint::mul_base(&hint.u);
+    let c_u = c_z * (-hint.u) + EdwardsPoint::mul_base(&hint.u2);
 
     let _c_z = c_z.compress();
     let _g_u = g_u.compress();
@@ -353,12 +384,13 @@ pub fn prove_shuffle_adapted(
 
     // Compute v and psi via oracle
     let v = s * delta + hint.u;
+    let v2 = (s * hint.r_z + hint.r_d) * delta + hint.u2;
     let c_rho = c_z + hint.c_pi * delta;
     let r_rho = hint.r_z + hint.r_pi * delta;
-    let z_pi_delta: Vec<Scalar> = (0..n)
-        .map(|i| z[pi[i]] + delta * Scalar::from(pi[i] as u64))
+    let z_rho: Vec<Scalar> = (0..n)
+        .map(|i| z[i] + delta * Scalar::from(i as u64))
         .collect();
-    let psi = prove_shuffle_known(pp, hint2, &z_pi_delta, &c_rho, pi, &r_rho);
+    let psi = prove_shuffle_known(pp, &hint.hint2, &z_rho, &c_rho, pi, &r_rho);
 
     AdaptedShuffleProof {
         _c_pi,
@@ -369,8 +401,83 @@ pub fn prove_shuffle_adapted(
         _c_u,
         x,
         v,
+        v2,
         psi,
     }
+}
+
+#[inline(always)]
+pub fn verify_shuffle_adapted(
+    pp: &PublicParams,
+    pk: &EdwardsPoint, // public key of the verifier
+    g: &[EdwardsPoint],
+    h: &[EdwardsPoint],
+    proof: &AdaptedShuffleProof,
+) -> bool {
+    let n = g.len();
+
+    let mut hasher = Sha256::new();
+    hasher.update(pk.compress().as_bytes());
+    for gi in g {
+        hasher.update(gi.compress().as_bytes());
+    }
+    for hi in h {
+        hasher.update(hi.compress().as_bytes());
+    }
+    hasher.update(proof._c_pi.as_bytes());
+    hasher.update(proof._c_d.as_bytes());
+    hasher.update(proof._g_d.as_bytes());
+
+    let hz = hasher.finalize();
+    let mut rng_z = ChaCha12Rng::from_seed(hz.into());
+    let z: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_z)).collect();
+
+    let c_pi = proof._c_pi.decompress().unwrap();
+    let c_d = proof._c_d.decompress().unwrap();
+    let g_d = proof._g_d.decompress().unwrap();
+
+    let mut hasher2 = Sha256::new();
+    for xi in &proof.x {
+        hasher2.update(xi.as_bytes());
+    }
+    hasher2.update(proof._c_z.as_bytes());
+    hasher2.update(proof._g_u.as_bytes());
+    hasher2.update(proof._c_u.as_bytes());
+    hasher2.update(hz);
+
+    let h_delta = hasher2.finalize();
+    let delta = Scalar::from_bytes_mod_order(h_delta.into());
+
+    let c_z = proof._c_z.decompress().unwrap();
+    let g_u = proof._g_u.decompress().unwrap();
+    let c_u = proof._c_u.decompress().unwrap();
+
+    let c_rho = c_z + c_pi * delta;
+    let z_rho: Vec<Scalar> = (0..n)
+        .map(|i| z[i] + delta * Scalar::from(i as u64))
+        .collect();
+    if !verify_shuffle_known(pp, &z_rho, &c_rho, &proof.psi) {
+        return false;
+    }
+
+    let lhs1 = EdwardsPoint::mul_base(&proof.v2);
+    let rhs1 = c_z * proof.v + (c_d - commit_determ(pp, &proof.x)) * delta + c_u;
+    if lhs1 != rhs1 {
+        return false;
+    }
+
+    let points = g.iter().chain(h.iter());
+    let scalars = proof.x.iter().cloned().chain(z.iter().map(|zi| -zi));
+    let rhs2 = EdwardsPoint::vartime_multiscalar_mul(scalars, points);
+    if g_d != rhs2 {
+        return false;
+    }
+
+    if EdwardsPoint::mul_base(&proof.v) != g_u + pk * delta {
+        return false;
+    }
+
+    true
 }
 
 mod known_content_tests {
@@ -379,10 +486,10 @@ mod known_content_tests {
 
     fn setup_params(n: usize) -> PublicParams {
         let mut rng = OsRng;
-        let g_h: Vec<EdwardsPoint> = (0..n + 1)
+        let f: Vec<EdwardsPoint> = (0..n)
             .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
             .collect();
-        PublicParams { g_h }
+        PublicParams { f }
     }
 
     /// Test that a correct shuffle verifies and a tampered proof fails.
@@ -395,9 +502,9 @@ mod known_content_tests {
         // Original messages m
         let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
         // Random permutation pi
-        let mut pi: Vec<usize> = (0..n).collect();
+        let (pi, _) = random_permutation(n);
 
-        pi.shuffle(&mut rng);
+        // pi.shuffle(&mut rng);
 
         // Commitment to shuffled m under randomness r
         let r = Scalar::random(&mut rng);
@@ -454,6 +561,47 @@ mod known_content_tests {
             "For each message, Proof time: {:.2} us , Verify time: {:.2} us",
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
+        );
+    }
+}
+
+mod adapted_shuffle_tests {
+    use super::*;
+    use rand::seq::SliceRandom;
+
+    fn setup_params(n: usize) -> PublicParams {
+        let mut rng = OsRng;
+        let f: Vec<EdwardsPoint> = (0..n)
+            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+            .collect();
+        PublicParams { f }
+    }
+    #[test]
+    fn test_adapted_shuffle_correctness() {
+        let n = 100;
+        let pp = setup_params(n);
+        let mut rng = OsRng;
+
+        // Original messages m
+        let m: Vec<EdwardsPoint> = (0..n)
+            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+            .collect();
+        // Random permutation pi
+        let (pi, pi_inv) = random_permutation(n);
+
+        // Public key pk and permuted messages m_shuffled
+        let s = Scalar::random(&mut rng);
+        let pk = EdwardsPoint::mul_base(&s);
+        let m_shuffled: Vec<EdwardsPoint> = pi_inv.iter().map(|&i| m[i] * s).collect(); // permutation inverse
+
+        // Prove and verify
+        let hint = prove_shuffle_adapted_preprocess(&pp, &pi, n);
+        let proof: AdaptedShuffleProof =
+            prove_shuffle_adapted(&pp, &pk, &hint, &m, &m_shuffled, &s, &pi);
+
+        assert!(
+            verify_shuffle_adapted(&pp, &pk, &m, &m_shuffled, &proof),
+            "Valid proof should verify"
         );
     }
 }
