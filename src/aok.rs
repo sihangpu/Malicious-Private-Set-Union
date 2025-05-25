@@ -1,6 +1,3 @@
-use core::hash;
-use std::ops::Mul;
-
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
