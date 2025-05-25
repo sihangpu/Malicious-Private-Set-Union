@@ -1,3 +1,4 @@
+use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
@@ -7,7 +8,6 @@ use itertools::izip;
 use rand::prelude::*;
 use rand::rngs::OsRng;
 use rand_chacha::ChaCha12Rng;
-use sha2::{Digest, Sha256};
 
 /// Public parameters for Pederson commitment: generators g,f_1, …, f_n
 pub struct PublicParams {
@@ -154,8 +154,8 @@ pub fn prove_shuffle_known(
 ) -> KnownContentProof {
     let n = m.len();
 
-    // Derive x deterministically: hash of public data using SHA-256
-    let mut hasher = Sha256::new();
+    // Derive x deterministically: hash of public data
+    let mut hasher = Blake2s256::new();
     hasher.update(c.compress().as_bytes());
     for mi in m {
         hasher.update(mi.as_bytes());
@@ -228,8 +228,8 @@ pub fn verify_shuffle_known(
 ) -> bool {
     let n = m.len();
     let mut rng = OsRng;
-    // Re-derive x using SHA-256
-    let mut hasher = Sha256::new();
+    // Re-derive x using Blake2s256
+    let mut hasher = Blake2s256::new();
     hasher.update(c.compress().as_bytes());
     for mi in m {
         hasher.update(mi.as_bytes());
@@ -347,7 +347,7 @@ pub fn prove_shuffle_adapted(
     let _g_d = g_d.compress();
 
     // Receive challenge z
-    let mut hasher = Sha256::new();
+    let mut hasher = Blake2s256::new();
     hasher.update(pk.compress().as_bytes());
     for _gi in _g {
         hasher.update(_gi.as_bytes());
@@ -424,7 +424,7 @@ pub fn verify_shuffle_adapted(
 ) -> bool {
     let n = g.len();
     let mut rng = OsRng;
-    let mut hasher = Sha256::new();
+    let mut hasher = Blake2s256::new();
 
     hasher.update(pk.compress().as_bytes());
     for _gi in _g {
@@ -549,7 +549,7 @@ pub fn batched_ddh_prove(
     let mut rng = OsRng;
     let r = Scalar::random(&mut OsRng);
 
-    let mut hasher = Sha256::new();
+    let mut hasher = Blake2s256::new();
     hasher.update(pk.compress().as_bytes());
     for _gi in _g {
         hasher.update(_gi.as_bytes());
@@ -585,7 +585,7 @@ pub fn batched_ddh_verify(
     let n = g.len();
     let mut rng = OsRng;
 
-    let mut hasher = Sha256::new();
+    let mut hasher = Blake2s256::new();
     hasher.update(pk.compress().as_bytes());
     for _gi in _g {
         hasher.update(_gi.as_bytes());
