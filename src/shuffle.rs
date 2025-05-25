@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
@@ -98,11 +100,14 @@ fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
     (perm, inv)
 }
 
-#[inline(always)]
+#[inline]
 fn prove_shuffle_known_preprocess(pp: &PublicParams, n: usize) -> KnownContentHint {
     let mut rng = OsRng;
     // Prover picks random d_i, r_d, Delta_i, r_Delta, a_i, r_a
-    let d: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+    let mut d = vec![Scalar::ZERO; n];
+    for di in &mut d {
+        *di = Scalar::random(&mut rng);
+    }
     let r_d = Scalar::random(&mut rng);
     let r_delta = Scalar::random(&mut rng);
     let mut delta = vec![Scalar::ZERO; n];
@@ -278,7 +283,7 @@ pub fn verify_shuffle_known(
     true
 }
 
-#[inline(always)]
+#[inline]
 fn prove_shuffle_adapted_preprocess(
     pp: &PublicParams,
     pi: &[usize],
@@ -318,10 +323,10 @@ fn prove_shuffle_adapted_preprocess(
 }
 
 /// Prover: produce the adapted shuffling proof
-#[inline(always)]
+#[inline]
 pub fn prove_shuffle_adapted(
     pp: &PublicParams,
-    pk: &EdwardsPoint, // public key of the verifier, i.e., h in the figure; omit the base point g which is suppoed to be ED25519_BASEPOINT
+    pk: &EdwardsPoint, // public key of the verifier, i.e., h in the figure; omit the base point g
     hint: &AdaptedShuffleHint,
     g: &[EdwardsPoint],
     h: &[EdwardsPoint],
@@ -336,6 +341,7 @@ pub fn prove_shuffle_adapted(
     let _c_d = hint.c_d.compress();
     let _g_d = g_d.compress();
     // Receive challenge z
+    let start = Instant::now();
     let mut hasher = Sha256::new();
     hasher.update(pk.compress().as_bytes());
     for gi in g {
@@ -352,7 +358,14 @@ pub fn prove_shuffle_adapted(
     let mut rng_z = ChaCha12Rng::from_seed(hz.into());
     let z: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_z)).collect();
 
+    let prooftime = start.elapsed();
+    println!(
+        "!!! SLOW! sha2 time: {:.2} us/msg",
+        prooftime.as_secs_f64() / n as f64 * 1_000_000f64
+    );
+
     // Compute x_i = s * z_pi(i) + d_i
+
     let x: Vec<Scalar> = (0..n).map(|i| s * z[pi[i]] + hint.d[i]).collect();
     let c_z = commit(pp, &pi.iter().map(|&i| z[i]).collect::<Vec<_>>(), &hint.r_z);
 
@@ -384,6 +397,7 @@ pub fn prove_shuffle_adapted(
     let z_rho: Vec<Scalar> = (0..n)
         .map(|i| z[i] + delta * Scalar::from(i as u64))
         .collect();
+
     let psi = prove_shuffle_known(pp, &hint.hint2, &z_rho, &c_rho, pi, &r_rho);
 
     AdaptedShuffleProof {
@@ -400,7 +414,7 @@ pub fn prove_shuffle_adapted(
     }
 }
 
-#[inline(always)]
+#[inline]
 pub fn verify_shuffle_adapted(
     pp: &PublicParams,
     pk: &EdwardsPoint, // public key of the verifier
