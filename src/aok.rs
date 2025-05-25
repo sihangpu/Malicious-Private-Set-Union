@@ -1,10 +1,12 @@
-use std::time::Instant;
+use core::hash;
+use std::ops::Mul;
 
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
     traits::VartimeMultiscalarMul,
 };
+use itertools::izip;
 use rand::prelude::*;
 use rand::rngs::OsRng;
 use rand_chacha::ChaCha12Rng;
@@ -62,6 +64,12 @@ pub struct AdaptedShuffleHint {
     pub hint2: KnownContentHint,
 }
 
+#[derive(Clone)]
+pub struct BatchedDDHProof {
+    pub _c: CompressedEdwardsY,
+    pub z: Scalar,
+}
+
 /// Compute a Pedersen-style commitment: \prod_i g_i^{m_i} * h^r
 #[inline(always)]
 pub fn commit(pp: &PublicParams, m: &[Scalar], r: &Scalar) -> EdwardsPoint {
@@ -79,7 +87,7 @@ pub fn commit_determ(pp: &PublicParams, m: &[Scalar]) -> EdwardsPoint {
     EdwardsPoint::vartime_multiscalar_mul(m.iter(), pp.f.iter())
 }
 
-#[inline(always)]
+#[inline]
 fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
     let mut rng = thread_rng();
 
@@ -138,7 +146,7 @@ fn prove_shuffle_known_preprocess(pp: &PublicParams, n: usize) -> KnownContentHi
 
 /// Prover: produce a non-interactive proof of correct shuffle of known m[0..n).
 /// `c` must be a commitment to m[pi[i]] under randomness `r`.
-#[inline(always)]
+#[inline]
 pub fn prove_shuffle_known(
     pp: &PublicParams,
     hint: &KnownContentHint,
@@ -155,7 +163,7 @@ pub fn prove_shuffle_known(
     for mi in m {
         hasher.update(mi.as_bytes());
     }
-    let hx = hasher.finalize();
+    let hx = hasher.finalize_reset();
     let x = Scalar::from_bytes_mod_order(hx.into());
 
     // a_i = \prod_{j=1..i} (m_{pi(j)} - x)
@@ -174,16 +182,15 @@ pub fn prove_shuffle_known(
     let c_a = commit(pp, &a2, &hint.r_a);
 
     // Derive challenge e from c_d, c_delta,ca, and hx
-    let mut haher2 = Sha256::new();
     let _c_d = hint.c_d.compress();
     let _c_delta = hint.c_delta.compress();
     let _c_a = c_a.compress();
-    haher2.update(_c_d.as_bytes());
-    haher2.update(_c_delta.as_bytes());
-    haher2.update(_c_a.as_bytes());
-    haher2.update(hx);
+    hasher.update(_c_d.as_bytes());
+    hasher.update(_c_delta.as_bytes());
+    hasher.update(_c_a.as_bytes());
+    hasher.update(hx);
 
-    let he = haher2.finalize();
+    let he = hasher.finalize();
     let e = Scalar::from_bytes_mod_order(he.into());
 
     // Compute responses f_i = e*m_{pi(i)} + d_i, z = e*r + r_d
@@ -215,7 +222,7 @@ pub fn prove_shuffle_known(
 }
 
 /// Verifier: check a non-interactive proof of shuffle known content.
-#[inline(always)]
+#[inline]
 pub fn verify_shuffle_known(
     pp: &PublicParams,
     m: &[Scalar],
@@ -230,16 +237,15 @@ pub fn verify_shuffle_known(
     for mi in m {
         hasher.update(mi.as_bytes());
     }
-    let hx = hasher.finalize();
+    let hx = hasher.finalize_reset();
     let x = Scalar::from_bytes_mod_order(hx.into());
 
     // Re-derive e
-    let mut hasher2 = Sha256::new();
-    hasher2.update(proof._c_d.as_bytes());
-    hasher2.update(proof._c_delta.as_bytes());
-    hasher2.update(proof._c_a.as_bytes());
-    hasher2.update(hx);
-    let he = hasher2.finalize();
+    hasher.update(proof._c_d.as_bytes());
+    hasher.update(proof._c_delta.as_bytes());
+    hasher.update(proof._c_a.as_bytes());
+    hasher.update(hx);
+    let he = hasher.finalize();
     let e = Scalar::from_bytes_mod_order(he.into());
 
     let c_d = proof._c_d.decompress().unwrap();
@@ -330,6 +336,8 @@ pub fn prove_shuffle_adapted(
     hint: &AdaptedShuffleHint,
     g: &[EdwardsPoint],
     h: &[EdwardsPoint],
+    _g: &[CompressedEdwardsY],
+    _h: &[CompressedEdwardsY],
     s: &Scalar,
     pi: &[usize],
 ) -> AdaptedShuffleProof {
@@ -340,29 +348,23 @@ pub fn prove_shuffle_adapted(
     let _c_pi = hint.c_pi.compress();
     let _c_d = hint.c_d.compress();
     let _g_d = g_d.compress();
+
     // Receive challenge z
-    let start = Instant::now();
     let mut hasher = Sha256::new();
     hasher.update(pk.compress().as_bytes());
-    for gi in g {
-        hasher.update(gi.compress().as_bytes());
+    for _gi in _g {
+        hasher.update(_gi.as_bytes());
     }
-    for hi in h {
-        hasher.update(hi.compress().as_bytes());
+    for _hi in _h {
+        hasher.update(_hi.as_bytes());
     }
     hasher.update(_c_pi.as_bytes());
     hasher.update(_c_d.as_bytes());
     hasher.update(_g_d.as_bytes());
+    let hz = hasher.finalize_reset();
 
-    let hz = hasher.finalize();
     let mut rng_z = ChaCha12Rng::from_seed(hz.into());
     let z: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_z)).collect();
-
-    let prooftime = start.elapsed();
-    println!(
-        "!!! SLOW! sha2 time: {:.2} us/msg",
-        prooftime.as_secs_f64() / n as f64 * 1_000_000f64
-    );
 
     // Compute x_i = s * z_pi(i) + d_i
 
@@ -377,16 +379,15 @@ pub fn prove_shuffle_adapted(
     let _c_u = c_u.compress();
 
     // Challenge Delta
-    let mut hasher2 = Sha256::new();
     for xi in &x {
-        hasher2.update(xi.as_bytes());
+        hasher.update(xi.as_bytes());
     }
-    hasher2.update(_c_z.as_bytes());
-    hasher2.update(_g_u.as_bytes());
-    hasher2.update(_c_u.as_bytes());
-    hasher2.update(hz);
+    hasher.update(_c_z.as_bytes());
+    hasher.update(_g_u.as_bytes());
+    hasher.update(_c_u.as_bytes());
+    hasher.update(hz);
 
-    let h_delta = hasher2.finalize();
+    let h_delta = hasher.finalize();
     let delta = Scalar::from_bytes_mod_order(h_delta.into());
 
     // Compute v and psi via oracle
@@ -420,23 +421,26 @@ pub fn verify_shuffle_adapted(
     pk: &EdwardsPoint, // public key of the verifier
     g: &[EdwardsPoint],
     h: &[EdwardsPoint],
+    _g: &[CompressedEdwardsY],
+    _h: &[CompressedEdwardsY],
     proof: &AdaptedShuffleProof,
 ) -> bool {
     let n = g.len();
-
+    let mut rng = OsRng;
     let mut hasher = Sha256::new();
+
     hasher.update(pk.compress().as_bytes());
-    for gi in g {
-        hasher.update(gi.compress().as_bytes());
+    for _gi in _g {
+        hasher.update(_gi.as_bytes());
     }
-    for hi in h {
-        hasher.update(hi.compress().as_bytes());
+    for _hi in _h {
+        hasher.update(_hi.as_bytes());
     }
     hasher.update(proof._c_pi.as_bytes());
     hasher.update(proof._c_d.as_bytes());
     hasher.update(proof._g_d.as_bytes());
 
-    let hz = hasher.finalize();
+    let hz = hasher.finalize_reset();
     let mut rng_z = ChaCha12Rng::from_seed(hz.into());
     let z: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_z)).collect();
 
@@ -444,16 +448,15 @@ pub fn verify_shuffle_adapted(
     let c_d = proof._c_d.decompress().unwrap();
     let g_d = proof._g_d.decompress().unwrap();
 
-    let mut hasher2 = Sha256::new();
     for xi in &proof.x {
-        hasher2.update(xi.as_bytes());
+        hasher.update(xi.as_bytes());
     }
-    hasher2.update(proof._c_z.as_bytes());
-    hasher2.update(proof._g_u.as_bytes());
-    hasher2.update(proof._c_u.as_bytes());
-    hasher2.update(hz);
+    hasher.update(proof._c_z.as_bytes());
+    hasher.update(proof._g_u.as_bytes());
+    hasher.update(proof._c_u.as_bytes());
+    hasher.update(hz);
 
-    let h_delta = hasher2.finalize();
+    let h_delta = hasher.finalize_reset();
     let delta = Scalar::from_bytes_mod_order(h_delta.into());
 
     let c_z = proof._c_z.decompress().unwrap();
@@ -464,13 +467,65 @@ pub fn verify_shuffle_adapted(
     let z_rho: Vec<Scalar> = (0..n)
         .map(|i| z[i] + delta * Scalar::from(i as u64))
         .collect();
-    if !verify_shuffle_known(pp, &z_rho, &c_rho, &proof.psi) {
+
+    // The verificaiton of the shuffle proof for known content
+    // Re-derive x using SHA-256
+    hasher.update(c_rho.compress().as_bytes());
+    for mi in &z_rho {
+        hasher.update(mi.as_bytes());
+    }
+    let psi_hx = hasher.finalize_reset();
+    let psi_x = Scalar::from_bytes_mod_order(psi_hx.into());
+
+    // Re-derive e
+    hasher.update(proof.psi._c_d.as_bytes());
+    hasher.update(proof.psi._c_delta.as_bytes());
+    hasher.update(proof.psi._c_a.as_bytes());
+    hasher.update(psi_hx);
+    let psi_he = hasher.finalize();
+    let psi_e = Scalar::from_bytes_mod_order(psi_he.into());
+
+    let psi_c_d = proof.psi._c_d.decompress().unwrap();
+    let psi_c_delta = proof.psi._c_delta.decompress().unwrap();
+    let psi_c_a = proof.psi._c_a.decompress().unwrap();
+
+    // Recompute F_i recursively and check final equality in Kown Content Proof
+    let mut F = proof.psi.f[0] - psi_e * psi_x;
+    let e_inv = psi_e.invert();
+    for i in 1..n {
+        let exp = proof.psi.f[i] - psi_e * psi_x;
+        let tmp = F * exp + proof.psi.f_delta[i - 1];
+        F = tmp * e_inv;
+    }
+    let mut prod = Scalar::ONE;
+    for mi in &z_rho {
+        prod *= *mi - psi_x;
+    }
+
+    if F != psi_e * prod {
         return false;
     }
 
-    let lhs1 = EdwardsPoint::mul_base(&proof.v2);
-    let rhs1 = c_z * proof.v + (c_d - commit_determ(pp, &proof.x)) * delta + c_u;
-    if lhs1 != rhs1 {
+    if EdwardsPoint::mul_base(&proof.v) != g_u + pk * delta {
+        return false;
+    }
+
+    // Check multi-commitment equations in a batch:
+    let alpha1 = Scalar::random(&mut rng);
+    let alpha2 = Scalar::random(&mut rng);
+
+    let com1 = c_rho * psi_e + psi_c_d;
+    let com2 = psi_c_a * psi_e + psi_c_delta;
+    let com3 = c_z * proof.v + c_d * delta + c_u - EdwardsPoint::mul_base(&proof.v2);
+
+    let lhs = com1 * alpha1 + com2 * alpha2 + com3;
+    let r_sum = proof.psi.z * alpha1 + proof.psi.z_delta * alpha2;
+
+    let f_sum = izip!(proof.psi.f.iter(), proof.psi.f_delta.iter(), proof.x.iter())
+        .map(|(f_i, f_delta_i, x_i)| alpha1 * f_i + alpha2 * f_delta_i + x_i * delta)
+        .collect::<Vec<_>>();
+    let rhs = commit(pp, &f_sum, &r_sum);
+    if lhs != rhs {
         return false;
     }
 
@@ -481,13 +536,90 @@ pub fn verify_shuffle_adapted(
         return false;
     }
 
-    if EdwardsPoint::mul_base(&proof.v) != g_u + pk * delta {
+    true
+}
+
+#[inline]
+pub fn batched_ddh_prove(
+    pk: &EdwardsPoint,
+    g: &[EdwardsPoint],
+    h: &[EdwardsPoint],
+    _g: &[CompressedEdwardsY],
+    _h: &[CompressedEdwardsY],
+    s: &Scalar,
+) -> BatchedDDHProof {
+    let n = g.len();
+    let mut rng = OsRng;
+    let r = Scalar::random(&mut OsRng);
+
+    let mut hasher = Sha256::new();
+    hasher.update(pk.compress().as_bytes());
+    for _gi in _g {
+        hasher.update(_gi.as_bytes());
+    }
+    for _hi in _h {
+        hasher.update(_hi.as_bytes());
+    }
+    let ha = hasher.finalize_reset();
+    let mut rng_a = ChaCha12Rng::from_seed(ha.into());
+    let ar: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_a) * r).collect();
+    let _c = (EdwardsPoint::vartime_multiscalar_mul(ar.iter(), g.iter())
+        + EdwardsPoint::mul_base(&r))
+    .compress();
+
+    hasher.update(_c.as_bytes());
+    hasher.update(ha);
+    let h_delta = hasher.finalize();
+    let delta = Scalar::from_bytes_mod_order(h_delta.into());
+    let z = delta * s + r;
+
+    BatchedDDHProof { _c, z }
+}
+
+#[inline]
+pub fn batched_ddh_verify(
+    pk: &EdwardsPoint,
+    g: &[EdwardsPoint],
+    h: &[EdwardsPoint],
+    _g: &[CompressedEdwardsY],
+    _h: &[CompressedEdwardsY],
+    proof: &BatchedDDHProof,
+) -> bool {
+    let n = g.len();
+    let mut rng = OsRng;
+
+    let mut hasher = Sha256::new();
+    hasher.update(pk.compress().as_bytes());
+    for _gi in _g {
+        hasher.update(_gi.as_bytes());
+    }
+    for _hi in _h {
+        hasher.update(_hi.as_bytes());
+    }
+    let ha = hasher.finalize_reset();
+    let mut rng_a = ChaCha12Rng::from_seed(ha.into());
+    let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng_a)).collect();
+
+    // Re-derive delta
+    hasher.update(proof._c.as_bytes());
+    hasher.update(ha);
+    let h_delta = hasher.finalize();
+    let delta = Scalar::from_bytes_mod_order(h_delta.into());
+
+    let lhs = proof._c.decompress().unwrap() + pk * delta - EdwardsPoint::mul_base(&proof.z);
+    let points = g.iter().chain(h.iter());
+    let scalars = a
+        .iter()
+        .cloned()
+        .map(|ai| ai * proof.z)
+        .chain(a.iter().map(|ai| -ai * delta));
+    let rhs2 = EdwardsPoint::vartime_multiscalar_mul(scalars, points);
+    if lhs != rhs2 {
         return false;
     }
 
     true
 }
-
 mod known_content_tests {
     use super::*;
 
@@ -575,21 +707,69 @@ mod adapted_shuffle_tests {
         let pk = EdwardsPoint::mul_base(&s);
         let m_shuffled: Vec<EdwardsPoint> = pi_inv.iter().map(|&i| m[i] * s).collect(); // permutation inverse
 
+        let m2 = m.iter().map(|mi| mi.compress()).collect::<Vec<_>>();
+        let m_shuffled2 = m_shuffled
+            .iter()
+            .map(|mi| mi.compress())
+            .collect::<Vec<_>>();
+
         // Prove and verify
         let hint = prove_shuffle_adapted_preprocess(&pp, &pi, n);
 
         let start = Instant::now();
         let proof: AdaptedShuffleProof =
-            prove_shuffle_adapted(&pp, &pk, &hint, &m, &m_shuffled, &s, &pi);
+            prove_shuffle_adapted(&pp, &pk, &hint, &m, &m_shuffled, &m2, &m_shuffled2, &s, &pi);
         let prooftime = start.elapsed();
 
         let start = Instant::now();
-        let result = verify_shuffle_adapted(&pp, &pk, &m, &m_shuffled, &proof);
+        let result = verify_shuffle_adapted(&pp, &pk, &m, &m_shuffled, &m2, &m_shuffled2, &proof);
         let verifytime = start.elapsed();
         assert!(result, "Valid proof should verify");
 
         println!(
             "Adapted shuffle aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
+            verifytime.as_secs_f64() / n as f64 * 1_000_000f64
+        );
+    }
+}
+
+mod batch_ddh_tests {
+    use super::*;
+
+    #[test]
+    fn test_batched_ddh() {
+        use std::time::Instant;
+        let n = 10_000;
+        let mut rng = OsRng;
+
+        // Public key pk and permuted messages m_shuffled
+        let s = Scalar::random(&mut rng);
+        let pk = EdwardsPoint::mul_base(&s);
+        // gs
+        let g: Vec<EdwardsPoint> = (0..n)
+            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+            .collect();
+
+        // hs
+        let h: Vec<EdwardsPoint> = g.iter().map(|gi| gi * s).collect();
+
+        let g2 = g.iter().map(|gi| gi.compress()).collect::<Vec<_>>();
+        let h2 = h.iter().map(|hi| hi.compress()).collect::<Vec<_>>();
+
+        // Prove and verify
+        let start = Instant::now();
+        let proof = batched_ddh_prove(&pk, &g, &h, &g2, &h2, &s);
+        let prooftime = start.elapsed();
+
+        let start = Instant::now();
+        let result = batched_ddh_verify(&pk, &g, &h, &g2, &h2, &proof);
+        let verifytime = start.elapsed();
+
+        assert!(result, "Valid proof should verify");
+
+        println!(
+            "Batched ddh aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
