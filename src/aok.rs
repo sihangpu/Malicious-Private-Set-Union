@@ -6,7 +6,6 @@ use curve25519_dalek::{
 };
 use itertools::izip;
 use rand::prelude::*;
-use rand::rngs::OsRng;
 use rand_chacha::ChaCha12Rng;
 
 /// Public parameters for Pederson commitment: generators g,f_1, …, f_n
@@ -107,7 +106,7 @@ fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
 
 #[inline]
 fn prove_shuffle_known_preprocess(pp: &PublicParams, n: usize) -> KnownContentHint {
-    let mut rng = OsRng;
+    let mut rng = thread_rng();
     // Prover picks random d_i, r_d, Delta_i, r_Delta, a_i, r_a
     let mut d = vec![Scalar::ZERO; n];
     for di in &mut d {
@@ -227,7 +226,7 @@ pub fn verify_shuffle_known(
     proof: &KnownContentProof,
 ) -> bool {
     let n = m.len();
-    let mut rng = OsRng;
+    let mut rng = thread_rng();
     // Re-derive x using Blake2s256
     let mut hasher = Blake2s256::new();
     hasher.update(c.compress().as_bytes());
@@ -292,7 +291,7 @@ fn prove_shuffle_adapted_preprocess(
     pi: &[usize],
     n: usize,
 ) -> AdaptedShuffleHint {
-    let mut rng = OsRng;
+    let mut rng = thread_rng();
     // Sample d, rd, rpi
     let d: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
     let r_d = Scalar::random(&mut rng);
@@ -423,7 +422,7 @@ pub fn verify_shuffle_adapted(
     proof: &AdaptedShuffleProof,
 ) -> bool {
     let n = g.len();
-    let mut rng = OsRng;
+    let mut rng = thread_rng();
     let mut hasher = Blake2s256::new();
 
     hasher.update(pk.compress().as_bytes());
@@ -546,8 +545,8 @@ pub fn batched_ddh_prove(
     s: &Scalar,
 ) -> BatchedDDHProof {
     let n = g.len();
-    let mut rng = OsRng;
-    let r = Scalar::random(&mut OsRng);
+    let mut rng = thread_rng();
+    let r = Scalar::random(&mut rng);
 
     let mut hasher = Blake2s256::new();
     hasher.update(pk.compress().as_bytes());
@@ -583,7 +582,6 @@ pub fn batched_ddh_verify(
     proof: &BatchedDDHProof,
 ) -> bool {
     let n = g.len();
-    let mut rng = OsRng;
 
     let mut hasher = Blake2s256::new();
     hasher.update(pk.compress().as_bytes());
@@ -621,7 +619,7 @@ mod known_content_tests {
     use super::*;
 
     fn setup_params(n: usize) -> PublicParams {
-        let mut rng = OsRng;
+        let mut rng = thread_rng();
         let f: Vec<EdwardsPoint> = (0..n)
             .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
             .collect();
@@ -635,7 +633,7 @@ mod known_content_tests {
         let n = 10_000;
 
         let pp = setup_params(n);
-        let mut rng = OsRng;
+        let mut rng = thread_rng();
         let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
         let mut pi: Vec<usize> = (0..n).collect();
         pi.shuffle(&mut rng);
@@ -678,7 +676,7 @@ mod adapted_shuffle_tests {
     use super::*;
 
     fn setup_params(n: usize) -> PublicParams {
-        let mut rng = OsRng;
+        let mut rng = thread_rng();
         let f: Vec<EdwardsPoint> = (0..n)
             .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
             .collect();
@@ -690,7 +688,7 @@ mod adapted_shuffle_tests {
         let n = 10_000;
 
         let pp = setup_params(n);
-        let mut rng = OsRng;
+        let mut rng = thread_rng();
 
         // Original messages m
         let m: Vec<EdwardsPoint> = (0..n)
@@ -738,7 +736,7 @@ mod batch_ddh_tests {
     fn test_batched_ddh() {
         use std::time::Instant;
         let n = 10_000;
-        let mut rng = OsRng;
+        let mut rng = thread_rng();
 
         // Public key pk and permuted messages m_shuffled
         let s = Scalar::random(&mut rng);

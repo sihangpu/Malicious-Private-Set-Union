@@ -9,7 +9,8 @@ use rand::prelude::*;
 use rand::{rngs::OsRng, RngCore};
 
 use aes::Aes128;
-use cipher::{generic_array::GenericArray, BlockCipher, KeyInit};
+use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
+use typenum::U16;
 
 // Pre-compute all constants at startup
 lazy_static! {
@@ -145,75 +146,76 @@ pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8
     reps
 }
 
-/// Encrypt a 256-bit block in‐place under AES-128 Feistel.
-/// `data` is 32 bytes; `master` is the 16-byte AES key.
-fn feistel_prp256(data: &mut [u8; 32], master: &[u8; 16]) {
-    // Split into two 16-byte halves
-    let (mut l, mut r) = data.split_at_mut(16);
-    // Initialize AES-128
-    let aes = Aes128::new(GenericArray::from_slice(master));
-
-    // Four rounds is plenty (Luby–Rackoff gives full PRP at 3 rounds)
-    for round in 1u8..=3 {
-        // Derive subkey Ki = AES(master, [round || 0..0])
-        let mut rc = [0u8; 16];
-        rc[0] = round;
-        let mut ki = GenericArray::clone_from_slice(&rc);
-        aes.encrypt_block(&mut ki);
-
-        // F = AES_{Ki}(R)
-        let mut f = GenericArray::clone_from_slice(r);
-        // XOR pre‐whiten: f = AES_{Ki}( R XOR Ki )
-        for i in 0..16 {
-            f[i] ^= ki[i]
-        }
-        aes.encrypt_block(&mut f);
-
-        // Feistel swap
-        for i in 0..16 {
-            let tmp = l[i] ^ f[i];
-            l[i] = r[i];
-            r[i] = tmp;
-        }
-    }
+/// A 256-bit PRP as a 3-round Feistel with AES-128 as F.
+/// We derive exactly 3 subkeys and use only encrypt_block().
+pub struct FeistelPrp256 {
+    round_keys: [GenericArray<u8, U16>; 3],
+    rounds: [Aes128; 3],
 }
 
-/// Decrypt a 256-bit block in-place that was encrypted with feistel_prp256.
-/// `data` is 32 bytes; `master` is the 16-byte AES key.
-fn feistel_prp256_inv(data: &mut [u8; 32], master: &[u8; 16]) {
-    // Split into two 16-byte halves
-    let (mut l, mut r) = data.split_at_mut(16);
-    // Initialize AES-128
-    let aes = Aes128::new(GenericArray::from_slice(master));
+impl FeistelPrp256 {
+    /// Master is the 16-byte AES key.
+    pub fn new(master: &[u8; 16]) -> Self {
+        // Master AES to derive subkeys
+        let aes_master = Aes128::new(GenericArray::from_slice(master));
+        let mut round_keys = [GenericArray::default(); 3];
+        let mut rounds = Vec::with_capacity(3);
 
-    // Four rounds in reverse
-    for round in (1u8..=3).rev() {
-        // Derive subkey Ki = AES(master, [round || 0..0])
-        let mut rc = [0u8; 16];
-        rc[0] = round;
-        let mut ki = GenericArray::clone_from_slice(&rc);
-        aes.encrypt_block(&mut ki);
+        for (i, rk) in round_keys.iter_mut().enumerate() {
+            // K_i = AES_master([i+1 || 0..0])
+            let mut buf = [0u8; 16];
+            buf[0] = (i + 1) as u8;
+            aes_master.encrypt_block(&mut GenericArray::from_mut_slice(&mut buf));
+            rk.copy_from_slice(&buf);
 
-        // F = AES_{Ki}( L ) with the same whitening trick
-        let mut f = GenericArray::clone_from_slice(l);
-        for i in 0..16 {
-            f[i] ^= ki[i]
-        }
-        aes.encrypt_block(&mut f);
-
-        // Inverse Feistel:
-        //   R_prev = L_curr
-        //   L_prev = R_curr ⊕ F
-        let mut prev_r = [0u8; 16];
-        let mut prev_l = [0u8; 16];
-        prev_r.copy_from_slice(l);
-        for i in 0..16 {
-            prev_l[i] = r[i] ^ f[i];
+            // Expand AES under K_i
+            rounds.push(Aes128::new(rk));
         }
 
-        // Write back for next iteration
-        l.copy_from_slice(&prev_l);
-        r.copy_from_slice(&prev_r);
+        let rounds = rounds.try_into().expect("exactly 3 rounds");
+        Self { round_keys, rounds }
+    }
+
+    /// Encrypts one 32-byte block in place.
+    pub fn encrypt_block(&self, block: &mut [u8; 32]) {
+        let (l, r) = block.split_at_mut(16);
+        let mut f = GenericArray::default();
+
+        for (rk, round) in self.round_keys.iter().zip(self.rounds.iter()) {
+            // f = AES_{K_i}( R ⊕ K_i )
+            for (o, (&rb, &kb)) in f.iter_mut().zip(r.iter().zip(rk.iter())) {
+                *o = rb ^ kb;
+            }
+            round.encrypt_block(&mut f);
+
+            // Feistel swap: (L,R) ← (R, L⊕f)
+            for i in 0..16 {
+                let tmp = l[i] ^ f[i];
+                l[i] = r[i];
+                r[i] = tmp;
+            }
+        }
+    }
+
+    /// Decrypts one 32-byte block in place by running F in reverse.
+    pub fn decrypt_block(&self, block: &mut [u8; 32]) {
+        let (l, r) = block.split_at_mut(16);
+        let mut f = GenericArray::default();
+
+        for (rk, round) in self.round_keys.iter().zip(self.rounds.iter()).rev() {
+            // f = AES_{K_i}( L ⊕ K_i )
+            for (o, (&lb, &kb)) in f.iter_mut().zip(l.iter().zip(rk.iter())) {
+                *o = lb ^ kb;
+            }
+            round.encrypt_block(&mut f);
+
+            // inverse Feistel: (L,R) ← (L⊕f, L)
+            for i in 0..16 {
+                let tmp = r[i];
+                r[i] = l[i];
+                l[i] = tmp ^ f[i];
+            }
+        }
     }
 }
 
@@ -240,6 +242,7 @@ pub struct PerformanceStats {
     pub ed_fixed_base_ops_per_sec: f64,
     pub ed_msm_ops_per_sec: f64,
     pub ed_round_trip_compression: f64,
+    pub aes_round_trip_time: f64,
 }
 
 pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
@@ -306,6 +309,20 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     }
     let ed_round_trip_time = start.elapsed();
 
+    // AES Permutation Benchmark
+    let mut data = [5u8; 32];
+    let mut master_key = [0u8; 16];
+    thread_rng().fill_bytes(&mut master_key);
+    let feistel_prp256 = FeistelPrp256::new(&master_key);
+    let start = Instant::now();
+    for _ in 0..iterations {
+        feistel_prp256.encrypt_block(&mut data);
+    }
+    for _ in 0..iterations {
+        feistel_prp256.decrypt_block(&mut data);
+    }
+    let aes_permutation_roundtrip_time = start.elapsed();
+
     PerformanceStats {
         field_to_mont_ops_per_sec: iterations as f64 / field_to_mont_time.as_secs_f64(),
         mont_to_field_ops_per_sec: iterations as f64 / mont_to_field_time.as_secs_f64(),
@@ -315,6 +332,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
         ed_fixed_base_ops_per_sec: iterations as f64 / ed_fixed_base_time.as_secs_f64(),
         ed_msm_ops_per_sec: iterations as f64 / ed_msm_time.as_secs_f64(),
         ed_round_trip_compression: iterations as f64 / ed_round_trip_time.as_secs_f64(),
+        aes_round_trip_time: iterations as f64 / aes_permutation_roundtrip_time.as_secs_f64(),
     }
 }
 
@@ -365,7 +383,7 @@ mod basic_tests {
 
     #[test]
     fn comprehensive_performance_benchmark() {
-        let iterations = 10_000;
+        let iterations = 10_00;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");
@@ -409,6 +427,12 @@ mod basic_tests {
             stats.ed_round_trip_compression,
             1_000_000f64 / stats.ed_round_trip_compression
         );
+        println!(
+            "AES Round-Trip Permutation: {:.0} ops/sec; each {:.1} us",
+            stats.aes_round_trip_time,
+            1_000_000f64 / stats.aes_round_trip_time
+        );
+
         println!("=====================================\n");
     }
 }
