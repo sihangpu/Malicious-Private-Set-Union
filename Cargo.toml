@@ -3,8 +3,12 @@ name = "malicious-two-sided-output-private-set-union"
 version = "0.1.0"
 edition = "2021"
 
+
+
 [dependencies]
 curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core", "serde","zeroize"] }
+ocelot = {path = "./swanky-dev/ocelot" }
+scuttlebutt = { path = "./swanky-dev/scuttlebutt" }
 subtle = "2.4"
 lazy_static = "1.4"
 rand=  "0.8"
@@ -32,3 +36,5 @@ overflow-checks = false
 [features]
 default = ["simd_optimizations"]
 simd_optimizations = []
+
+

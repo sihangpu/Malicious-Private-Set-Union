@@ -4,9 +4,12 @@ use std::collections::HashSet;
 
 use crate::aok::random_permutation;
 use crate::mapping::hash_to_curve;
+use crate::otext::{otext, rand_block_vec};
 
+use ocelot::ot::{KosReceiver, KosSender};
+use scuttlebutt::Block;
 use std::sync::mpsc::{channel, Receiver as MpscReceiver, Sender as MpscSender};
-use std::thread::{self};
+use std::thread;
 
 //shuffle OPRF
 pub struct Sender {
@@ -98,37 +101,22 @@ impl Receiver {
         &self,
         sender_points: &[MontgomeryPoint],
         shuffled: &[MontgomeryPoint],
-    ) -> Vec<u8> {
+    ) -> Vec<bool> {
         let send_size = sender_points.len();
-        let mut indicator = vec![0u8; send_size];
+        let mut indicator = vec![false; send_size];
         let set: HashSet<MontgomeryPoint> = shuffled.iter().cloned().collect();
         for (i, point) in sender_points.iter().enumerate() {
             if set.contains(point) {
                 // intersection found
-                indicator[i] = 1;
+                indicator[i] = true;
             }
         }
         indicator
     }
 }
 
-pub fn semi_honest_psu(sender: Sender, receiver: Receiver) {
+pub fn semi_honest_psu(sender: Sender, receiver: Receiver, ms: Vec<(Block, Block)>) {
     let (end_s, end_r) = duplex();
-
-    let r_handle = thread::spawn(move || {
-        let rc_m1 = receiver.gen();
-
-        end_r.tx.send(rc_m1).unwrap();
-
-        let mut sd_m1 = end_r.rx.recv().unwrap();
-        receiver.blind(&mut sd_m1.points);
-
-        let sd_m2 = end_r.rx.recv().unwrap();
-
-        let indicator = receiver.compare(&sd_m1.points, &sd_m2.points);
-
-        // assert!(indicator == vec![1u8; sender.n]); // when use cloned input
-    });
 
     let s_handle = thread::spawn(move || {
         let sd_m1 = sender.gen();
@@ -142,8 +130,18 @@ pub fn semi_honest_psu(sender: Sender, receiver: Receiver) {
         end_s.tx.send(sd_m2).unwrap();
     });
 
+    let rc_m1 = receiver.gen();
+    end_r.tx.send(rc_m1).unwrap();
+
+    let mut sd_m1 = end_r.rx.recv().unwrap();
+    receiver.blind(&mut sd_m1.points);
+
+    let sd_m2 = end_r.rx.recv().unwrap();
+    let indicator = receiver.compare(&sd_m1.points, &sd_m2.points);
+
+    // assert!(indicator == vec![1u8; sender.n]); // when use cloned input
     s_handle.join().unwrap();
-    r_handle.join().unwrap();
+    otext::<KosSender, KosReceiver>(&indicator, ms.clone());
 }
 
 mod semi_honest_test {
@@ -156,12 +154,27 @@ mod semi_honest_test {
         let mut rng = rand::thread_rng();
         let input_s: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
         // let input_r: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
+
+        let m0s: Vec<Block> = input_s
+            .chunks_exact(16)
+            .map(|item| {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(item);
+                Block::from_array(arr)
+            })
+            .collect();
+        let m1s = rand_block_vec(n);
+        let ms = m0s
+            .into_iter()
+            .zip(m1s.into_iter())
+            .collect::<Vec<(Block, Block)>>();
+
         let input_r = input_s.clone();
         let sender = Sender::new(input_s, n, n);
         let receiver = Receiver::new(input_r, n);
 
         let start = std::time::Instant::now();
-        semi_honest_psu(sender, receiver);
+        semi_honest_psu(sender, receiver, ms);
         let duration = start.elapsed();
         println!("Semi-honest PSU completed in: {:?}", duration);
     }

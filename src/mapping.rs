@@ -411,9 +411,9 @@ mod basic_tests {
             1_000_000f64 / stats.ed_round_trip_compression
         );
         println!(
-            "AES Round-Trip Permutation: {:.0} ops/sec; each {:.1} us",
+            "AES Round-Trip Permutation: {:.0} ops/sec; each {:.1} ns",
             stats.aes_round_trip_time,
-            1_000_000f64 / stats.aes_round_trip_time
+            1_000_000_000f64 / stats.aes_round_trip_time
         );
 
         println!("=====================================\n");
