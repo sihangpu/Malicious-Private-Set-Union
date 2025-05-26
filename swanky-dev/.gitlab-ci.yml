@@ -1,0 +1,50 @@
+normal-test:
+  tags: [docker-nix]
+  image: "python:3.13-bookworm"
+  interruptible: true
+  variables:
+    GIT_STRATEGY: fetch
+    NIX_REMOTE: daemon
+    TMPDIR: /tmp
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+  before_script:
+    - mkdir -p -m 0755 /nix/var/log/nix/drvs
+    - mkdir -p -m 0755 /nix/var/nix/gcroots
+    - mkdir -p -m 0755 /nix/var/nix/profiles
+    - mkdir -p -m 0755 /nix/var/nix/temproots
+    - mkdir -p -m 0755 /nix/var/nix/userpool
+    - mkdir -p -m 1777 /nix/var/nix/gcroots/per-user
+    - mkdir -p -m 1777 /nix/var/nix/profiles/per-user
+    - mkdir -p -m 0755 /nix/var/nix/profiles/per-user/root
+    - export NIX_PATH="nixpkgs=$PWD/etc/nix/pkgs.nix"
+    - export PATH="/nix/var/nix/profiles/default/bin/:$PATH"
+  script:
+    - ./etc/ci/swanky_releasing_check.sh
+    - ./swanky ci quick --cache-dir /var/lib/swanky-sccache/
+
+nightly-test:
+  image: debian:bookworm
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: on_success
+  interruptible: true
+  tags: [linux]
+  timeout: 4h
+  variables:
+    TMPDIR: /tmp
+  script:
+    - apt-get update && apt-get install -y nix python3 lz4 zstd
+    - bash -c "set -euxo pipefail; ./swanky ci nightly 2>&1 | lz4 > ./log.lz4"
+    - tar -c ./coverage | zstd -9 -T > ./coverage.tar.zst
+  artifacts:
+    paths:
+      - log.lz4
+      - ./coverage/coverage-split
+      - ./coverage.tar.zst
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: ./coverage/coverage-split/*.xml
+    expire_in: 1 week

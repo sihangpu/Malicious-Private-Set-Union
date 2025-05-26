@@ -1,0 +1,62 @@
+[package]
+name = "diet-mac-and-cheese"
+readme = "README.md"
+description = "A diet version of the Mac'n'Cheese protocol"
+categories = ["cryptography"]
+keywords = ["cryptography", "zero-knowledge", "circuit"]
+autoexamples = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+# jemallocator is available via feature flag because the library does not support
+# the wasm32-unknown-unknown target used by web-mac-n-cheese
+[features]
+jemalloc = ["jemallocator"]
+
+[dependencies]
+blake3.workspace = true
+crypto-bigint.workspace = true
+rand.workspace = true
+clap.workspace = true
+eyre.workspace = true
+generic-array.workspace = true
+jemallocator = { workspace = true, optional = true }
+log.workspace = true
+mac-n-cheese-sieve-parser.workspace = true
+pretty_env_logger.workspace = true
+num-bigint.workspace = true
+num-traits.workspace = true
+scuttlebutt.workspace = true
+swanky-field.workspace = true
+swanky-field-binary.workspace = true
+swanky-field-f61p.workspace = true
+swanky-field-ff-primes.workspace = true
+swanky-polynomial.workspace = true
+subtle.workspace = true
+ocelot.workspace = true
+flatbuffers.workspace = true
+nix.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true, features = ["display", "parse"] }
+swanky-party.workspace = true
+rustc-hash.workspace = true
+
+[build-dependencies]
+swanky-flatbuffer-build.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[[example]]
+name = "dietmc_lib"
+path = "examples/dietmc_lib.rs"
+
+[[bin]]
+name = "dietmc"
+path = "bin/dietmc.rs"

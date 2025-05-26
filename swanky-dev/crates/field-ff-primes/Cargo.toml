@@ -1,0 +1,40 @@
+[package]
+name = "swanky-field-ff-primes"
+description = "Finite field implementations for large prime fields"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+generic-array.workspace = true
+swanky-field.workspace = true
+swanky-serialization.workspace = true
+rand_core.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+subtle.workspace = true
+ff = { workspace = true, features = ["derive"] }
+swanky-field-fft.workspace = true
+ndarray.workspace = true
+num-traits.workspace = true
+crypto-bigint.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+swanky-field-test.workspace = true
+swanky-polynomial.workspace = true
+proptest.workspace = true
+num-bigint.workspace = true
+
+[build-dependencies]
+ff_codegen = { workspace = true }
+tempfile.workspace = true
+sha2.workspace = true
+num-bigint.workspace = true
+num_cpus.workspace = true
+

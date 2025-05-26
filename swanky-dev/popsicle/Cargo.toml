@@ -1,0 +1,55 @@
+[package]
+name = "popsicle"
+readme = "README.md"
+description = "A library for private set intersection"
+categories = ["cryptography"]
+keywords = ["cryptography", "private-set-intersection", "PSI"]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[dependencies]
+ocelot.workspace = true
+scuttlebutt.workspace = true
+itertools.workspace = true
+rand.workspace = true
+sha2.workspace = true
+aes-gcm.workspace = true
+fancy-garbling = { workspace = true, features = ["serde"]}
+serde          = { workspace = true, features = ["derive"]}
+serde_json     = { workspace = true}
+proptest = { workspace = true}
+vectoreyes.workspace = true
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "psz"
+harness = false
+
+[[bench]]
+name = "psty"
+harness = false
+
+[[bench]]
+name = "psty_payload"
+harness = false
+
+[[example]]
+name = "psty"
+
+[[example]]
+name = "psty-payload"
+
+[[example]]
+name = "circuit_psi_cardinality"
+
+[[example]]
+name = "circuit_psi_payload_sum"

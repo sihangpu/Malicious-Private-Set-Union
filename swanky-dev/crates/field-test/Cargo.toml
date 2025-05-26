@@ -1,0 +1,20 @@
+[package]
+name = "swanky-field-test"
+description = "Utilitites for testing correctness of finite field implementations"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+swanky-field.workspace = true
+swanky-polynomial.workspace = true
+swanky-serialization.workspace = true
+proptest.workspace = true
+generic-array.workspace = true
+crypto-bigint.workspace = true
+

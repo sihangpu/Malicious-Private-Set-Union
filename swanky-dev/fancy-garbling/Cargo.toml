@@ -1,0 +1,61 @@
+[package]
+name = "fancy-garbling"
+readme = "README.md"
+description = "A library for boolean and arithmetic garbling"
+categories = ["cryptography"]
+keywords = ["cryptography", "garbled-circuit", "GC"]
+autobenches = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[features]
+serde = ["dep:serde", "dep:serde_json", "scuttlebutt/serde"]
+
+[dependencies]
+fancy-garbling-base-conversion.workspace = true
+scuttlebutt.workspace = true
+ocelot.workspace = true
+vectoreyes.workspace = true
+itertools.workspace = true
+clap.workspace = true
+rand.workspace = true
+regex.workspace = true
+subtle.workspace = true
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bin]]
+name = "gen-deltas"
+required-features = ["serde"]
+
+[[bench]]
+name = "wire_operations"
+harness = false
+
+[[bench]]
+name = "garbling"
+harness = false
+
+[[bench]]
+name = "circuits"
+harness = false
+
+[[bench]]
+name = "util"
+harness = false
+
+[[bench]]
+name = "semihonest_2pc"
+harness = false

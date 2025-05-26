@@ -1,0 +1,54 @@
+[package]
+name = "ocelot"
+readme = "README.md"
+description = "A library for oblivious transfer protocols"
+categories = ["cryptography"]
+keywords = ["cryptography", "oblivious-transfer", "OT"]
+autoexamples = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[dependencies]
+blake3.workspace = true
+curve25519-dalek.workspace = true
+rand.workspace = true
+scuttlebutt.workspace = true
+vectoreyes.workspace = true
+generic-array.workspace = true
+subtle.workspace = true
+bytemuck.workspace = true
+keyed_arena.workspace = true
+arrayvec.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+nix.workspace = true
+proptest.workspace = true
+clap.workspace = true
+
+[[bench]]
+name = "ot"
+harness = false
+
+[[bench]]
+name = "oprf"
+harness = false
+
+[[bench]]
+name = "svole"
+harness = false
+
+[[example]]
+name = "kmprt"
+harness = false

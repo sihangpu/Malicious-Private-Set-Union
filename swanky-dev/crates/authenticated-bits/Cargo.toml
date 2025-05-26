@@ -1,0 +1,22 @@
+[package]
+name = "swanky-authenticated-bits"
+description = "A package for generating authenticated bits"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+swanky-party.workspace = true
+swanky-channel.workspace = true
+ocelot.workspace = true
+scuttlebutt.workspace = true
+vectoreyes.workspace = true
+rand.workspace = true
+proptest.workspace = true
+swanky-aes-rng.workspace = true
+eyre.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "swanky-field-binary"
+description = "Binary finite (extension) fields"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+swanky-serialization.workspace = true
+swanky-field.workspace = true
+vectoreyes.workspace = true
+subtle.workspace = true
+generic-array.workspace = true
+rand.workspace = true
+bytemuck = { workspace = true, features = ["derive"] }
+crypto-bigint.workspace = true
+
+[dev-dependencies]
+swanky-field-test.workspace = true
+swanky-polynomial.workspace = true
+proptest.workspace = true

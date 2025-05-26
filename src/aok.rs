@@ -84,7 +84,7 @@ pub fn commit_determ(pp: &PublicParams, m: &[Scalar]) -> EdwardsPoint {
 }
 
 #[inline]
-fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
+pub fn random_permutation(n: usize) -> (Vec<usize>, Vec<usize>) {
     let mut rng = thread_rng();
 
     // Start with the identity permutation.

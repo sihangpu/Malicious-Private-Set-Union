@@ -4,11 +4,13 @@ use curve25519_dalek::{
     constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
     scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
+
 use lazy_static::lazy_static;
 use rand::prelude::*;
 use rand::{rngs::OsRng, RngCore};
 
 use aes::Aes128;
+use blake2::{Blake2s256, Digest};
 use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use typenum::U16;
 
@@ -95,37 +97,6 @@ pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 
     };
 
     Some([r0, r1])
-}
-
-// Batch processing for multiple field elements
-pub fn field_mont_points_batch(rs: &[FieldElement]) -> Vec<MontgomeryPoint> {
-    const BATCH_SIZE: usize = 8; // Optimal for cache efficiency on most CPUs
-
-    let mut results = Vec::with_capacity(rs.len());
-
-    // Process in cache-friendly chunks
-    for chunk in rs.chunks(BATCH_SIZE) {
-        for r in chunk {
-            results.push(field_mont_point_optimized(r));
-        }
-    }
-
-    results
-}
-
-// Memory-efficient batch inverse mapping
-pub fn mont_points_field_batch(ps: &[MontgomeryPoint]) -> Vec<Option<[FieldElement; 2]>> {
-    const BATCH_SIZE: usize = 8;
-
-    let mut results = Vec::with_capacity(ps.len());
-
-    for chunk in ps.chunks(BATCH_SIZE) {
-        for p in chunk {
-            results.push(mont_point_field_optimized(p));
-        }
-    }
-
-    results
 }
 
 // Cache-friendly representative enumeration to handle 8-torsion points
@@ -219,7 +190,18 @@ impl FeistelPrp256 {
     }
 }
 
-// Performance utilities
+#[inline(always)]
+pub fn hash_to_field(input: &[u8]) -> FieldElement {
+    let arr: [u8; 32] = Blake2s256::digest(input).into();
+    FieldElement::from_bytes(&arr)
+}
+#[inline(always)]
+pub fn hash_to_curve(input: &[u8]) -> MontgomeryPoint {
+    let r = hash_to_field(input);
+    field_mont_point_optimized(&r)
+}
+
+// ========= Performance utilities =============
 fn generate_dataset<R: CryptoRng + RngCore>(
     rng: &mut R,
     n: usize,
@@ -277,6 +259,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     let start = Instant::now();
     for _ in 0..iterations {
         let _ = test_point * &*SC_INV_8;
+        // let _ = test_point.mul_clamped([8u8; 32]);
     }
     let scalar_mult_time = start.elapsed();
 

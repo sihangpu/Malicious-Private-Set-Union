@@ -1,0 +1,38 @@
+[package]
+name = "vectoreyes"
+description = "Cross-platform SIMD types and functions"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+build = "build/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+num-traits.workspace = true
+bytemuck.workspace = true
+subtle.workspace = true
+serde.workspace = true
+rand.workspace = true
+aes.workspace = true
+lazy_static.workspace = true
+
+[dev-dependencies]
+aes.workspace = true
+proptest.workspace = true
+lazy_static.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+prettyplease.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+quick-xml = { workspace = true, features = ["serialize", "overlapped-lists"] }
+zstd.workspace = true
+

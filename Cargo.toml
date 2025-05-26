@@ -7,11 +7,11 @@ edition = "2021"
 curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core", "serde","zeroize"] }
 subtle = "2.4"
 lazy_static = "1.4"
-rand= {version = "0.8", features = ["small_rng"]}
+rand=  "0.8"
 rand_chacha = "0.3"
 blake2 = "0.10.5"
 itertools = "0.10.5"
-aes    = { version = "0.8.4" }
+aes    =  "0.8.4" 
 cipher = "0.4"
 typenum= "1.15.0"
 
@@ -27,7 +27,6 @@ lto = "fat"          # Full link-time optimization
 codegen-units = 1    # Better optimization but slower compile
 panic = "abort"      # Smaller binary, faster code
 overflow-checks = false
-
 
 
 [features]

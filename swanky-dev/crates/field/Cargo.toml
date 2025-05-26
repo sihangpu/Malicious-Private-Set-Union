@@ -1,0 +1,20 @@
+[package]
+name = "swanky-field"
+description = "Definitions of the core `FiniteField` and `FiniteRing` traits"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rand.workspace = true
+generic-array.workspace = true
+subtle.workspace = true
+num-traits.workspace = true
+crypto-bigint.workspace = true
+
+swanky-serialization.workspace = true
