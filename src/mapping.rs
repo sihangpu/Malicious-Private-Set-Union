@@ -1,9 +1,15 @@
 // Mapping module for efficient field and Montgomery point conversions
 use core::ops::Neg;
 use curve25519_dalek::{
-    constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
-    scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
+    constants,
+    edwards::EdwardsPoint,
+    field::FieldElement,
+    montgomery::MontgomeryPoint,
+    scalar::{clamp_integer, Scalar},
+    traits::Identity,
+    traits::VartimeMultiscalarMul,
 };
+use std::result;
 
 use lazy_static::lazy_static;
 use rand::prelude::*;
@@ -27,7 +33,7 @@ lazy_static! {
 
 // Optimized direct mapping with reduced allocations, based on the direct map of Elligagor 2.
 #[inline(always)]
-pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
+pub fn field_to_mont(r: &FieldElement) -> MontgomeryPoint {
     // Pre-compute u² and reuse throughout
     let u_squared = r.square();
     let zu = &*FE_Z * &u_squared;
@@ -64,7 +70,7 @@ pub fn field_mont_point_optimized(r: &FieldElement) -> MontgomeryPoint {
 
 // Optimized inverse mapping, based on the inverse map of Elligagor 2.
 #[inline(always)]
-pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
+pub fn mont_to_field(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
     let u = FieldElement::from_bytes(&p.to_bytes());
 
     // Early exit check using pre-computed constant
@@ -99,9 +105,95 @@ pub fn mont_point_field_optimized(p: &MontgomeryPoint) -> Option<[FieldElement; 
     Some([r0, r1])
 }
 
+#[inline(always)]
+pub fn field_to_edwards(r: &FieldElement) -> EdwardsPoint {
+    // Convert to Montgomery and then to Edwards
+    field_to_mont(r).to_edwards(0u8).unwrap()
+}
+#[inline(always)]
+pub fn edwards_to_field(p: &EdwardsPoint) -> Option<[FieldElement; 2]> {
+    // Convert to Montgomery and then to field
+    mont_to_field(&p.to_montgomery())
+}
+
+#[inline(always)]
+pub fn hash_to_point(item: &[u8; 16], permut: &FeistelPrp256) -> EdwardsPoint {
+    // Hash to field and then convert to Edwards
+    let mut padded: [u8; 32] = [0u8; 32];
+    padded[..16].copy_from_slice(item);
+    permut.encrypt_block(&mut padded);
+    let r = FieldElement::from_bytes(&padded);
+    field_to_edwards(&r)
+}
+
+#[inline(always)]
+pub fn recover_from_point(point: &EdwardsPoint, permut: &FeistelPrp256) -> [u8; 16] {
+    // Convert Edwards point to Montgomery and then to field
+    let mut item = [0u8; 16];
+    let mut p = EdwardsPoint::default();
+    for i in 0..8 {
+        p = point + constants::EIGHT_TORSION[i];
+        let pair: Option<[FieldElement; 2]> = edwards_to_field(&p);
+        if let Some(r) = pair {
+            if check_item(&r[0], &r[1], permut, &mut item) {
+                // println!("found at {} representative", i);
+                return item;
+            }
+        }
+    }
+    item
+}
+
+#[inline(always)]
+fn check_bytes(bytes: &mut [u8; 32], permut: &FeistelPrp256, result: &mut [u8; 16]) -> bool {
+    let mut bytes_nc = bytes.clone();
+    bytes_nc[31] |= 0x80; // Set MSB for non-canonical form
+    permut.decrypt_block(&mut bytes_nc);
+    permut.decrypt_block(bytes);
+    if bytes[16..] == [0u8; 16] {
+        result.copy_from_slice(&bytes[..16]);
+        return true;
+    } else if bytes_nc[16..] == [0u8; 16] {
+        result.copy_from_slice(&bytes_nc[..16]);
+        return true;
+    }
+    return false;
+}
+#[inline(always)]
+fn check_item(
+    r0: &FieldElement,
+    r1: &FieldElement,
+    permut: &FeistelPrp256,
+    result: &mut [u8; 16],
+) -> bool {
+    // Check if the field elements are valid representatives
+    let r0_neg = r0.neg();
+    let r1_neg = r1.neg();
+
+    let mut bytes = r0.as_bytes();
+    if check_bytes(&mut bytes, permut, result) {
+        return true;
+    }
+
+    bytes = r0_neg.as_bytes();
+    if check_bytes(&mut bytes, permut, result) {
+        return true;
+    }
+
+    bytes = r1.as_bytes();
+    if check_bytes(&mut bytes, permut, result) {
+        return true;
+    }
+
+    bytes = r1_neg.as_bytes();
+    if check_bytes(&mut bytes, permut, result) {
+        return true;
+    }
+    return false;
+}
 // Cache-friendly representative enumeration to handle 8-torsion points
 #[inline(always)]
-pub fn enumerate_representatives_optimized(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
+pub fn enumerate_edwards(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
 
     // Manual unroll for better optimization
@@ -198,7 +290,7 @@ pub fn hash_to_field(input: &[u8]) -> FieldElement {
 #[inline(always)]
 pub fn hash_to_curve(input: &[u8]) -> MontgomeryPoint {
     let r = hash_to_field(input);
-    field_mont_point_optimized(&r)
+    field_to_mont(&r)
 }
 
 // ========= Performance utilities =============
@@ -225,33 +317,36 @@ pub struct PerformanceStats {
     pub ed_msm_ops_per_sec: f64,
     pub ed_round_trip_compression: f64,
     pub aes_round_trip_time: f64,
+    pub hashpoint_round_trip_time: f64,
 }
 
 pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     use std::time::Instant;
 
     let test_field = FieldElement::from_bytes(&[42u8; 32]);
-    let test_point = field_mont_point_optimized(&test_field);
+    let test_point = field_to_mont(&test_field);
     let test_point_ed = test_point.to_edwards(0u8).unwrap();
 
     // Benchmark field to Montgomery
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = field_mont_point_optimized(&test_field);
+        let m = field_to_mont(&test_field);
+        // let e = m.to_edwards(0u8).unwrap();
     }
     let field_to_mont_time = start.elapsed();
 
     // Benchmark Montgomery to field
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = mont_point_field_optimized(&test_point);
+        // let _ = test_point_ed.to_montgomery();
+        let _ = mont_to_field(&test_point);
     }
     let mont_to_field_time = start.elapsed();
 
     // Benchmark enumerate representatives
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = enumerate_representatives_optimized(&test_point_ed);
+        let _ = enumerate_edwards(&test_point_ed);
     }
     let enumerate_reps_time = start.elapsed();
 
@@ -292,6 +387,17 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     }
     let ed_round_trip_time = start.elapsed();
 
+    // Benchmark hash to point and recover
+    let mut item = [235u8; 16];
+    let permut = FeistelPrp256::new(&[7u8; 16]);
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let point = hash_to_point(&item, &permut);
+        let add = point - constants::EIGHT_TORSION[3]; // i-times enumerate
+        let _ = recover_from_point(&add, &permut);
+    }
+    let hashpoint_round_trip_time = start.elapsed();
+
     // AES Permutation Benchmark
     let mut data = [5u8; 32];
     let mut master_key = [0u8; 16];
@@ -316,6 +422,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
         ed_msm_ops_per_sec: iterations as f64 / ed_msm_time.as_secs_f64(),
         ed_round_trip_compression: iterations as f64 / ed_round_trip_time.as_secs_f64(),
         aes_round_trip_time: iterations as f64 / aes_permutation_roundtrip_time.as_secs_f64(),
+        hashpoint_round_trip_time: iterations as f64 / hashpoint_round_trip_time.as_secs_f64(),
     }
 }
 
@@ -331,8 +438,8 @@ mod basic_tests {
         let r = FieldElement::from_bytes(&bytes);
 
         // Test correctness
-        let p1 = field_mont_point_optimized(&r);
-        let reps = mont_point_field_optimized(&p1);
+        let p1 = field_to_mont(&r);
+        let reps = mont_to_field(&p1);
 
         if let Some(reps) = reps {
             assert!(reps.iter().any(|x| *x == r || *x == r.neg()));
@@ -344,13 +451,13 @@ mod basic_tests {
         let e1 = p1.to_edwards(0u8).unwrap().mul_by_cofactor();
         let e2 = e1 * &*SC_INV_8;
 
-        let reps = enumerate_representatives_optimized(&e2);
+        let reps = enumerate_edwards(&e2);
 
         assert!(reps.iter().any(|x| x.mul_by_cofactor() == e1));
 
         let mut found = false;
         for i in 0..8 {
-            let pair = mont_point_field_optimized(&reps[i].to_montgomery());
+            let pair = mont_to_field(&reps[i].to_montgomery());
             if pair == None {
                 continue;
             } else {
@@ -362,6 +469,23 @@ mod basic_tests {
             }
         }
         assert!(found);
+
+        // Test sclars and clamped integer multiplication
+        let k_8 = [8u8; 32];
+        let k = Scalar::from_bytes_mod_order(clamp_integer(k_8)) * *SC_INV_8;
+        let e2_ = e2.clone() * k * k * Scalar::from(8u64);
+        let e2_8kk = e2.mul_clamped(k_8) * k;
+        assert_eq!(e2_8kk, e2_);
+        println!("✓ Scalar multiplication tests passed");
+
+        // Test hash to point and recover
+        let mut item = [235u8; 16];
+        let permut = FeistelPrp256::new(&[7u8; 16]);
+        let point = hash_to_point(&item, &permut);
+        let point2 = point.mul_by_cofactor() * &*SC_INV_8;
+        let recovered = recover_from_point(&point2, &permut);
+        assert_eq!(item, recovered);
+        println!("✓ Hash to point and recover tests passed");
     }
 
     #[test]
@@ -414,6 +538,11 @@ mod basic_tests {
             "AES Round-Trip Permutation: {:.0} ops/sec; each {:.1} ns",
             stats.aes_round_trip_time,
             1_000_000_000f64 / stats.aes_round_trip_time
+        );
+        println!(
+            "Hash to Point Round-Trip: {:.0} ops/sec; each {:.1} us",
+            stats.hashpoint_round_trip_time,
+            1_000_000f64 / stats.hashpoint_round_trip_time
         );
 
         println!("=====================================\n");

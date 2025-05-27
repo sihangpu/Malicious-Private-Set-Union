@@ -2,7 +2,15 @@
 rustflags = ["-C", "target-cpu=native"]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "target-cpu=apple-m1", '--cfg=aes_armv8,curve25519_dalek_backend="simd"', "link-arg=-fuse-ld=lld"]
+rustflags = ['--cfg=curve25519_dalek_backend="u64"',
+             "-C", "target-cpu=apple-m1",    
+             "-C", "target-feature=+neon,+aes,+sha2,+crc,+fp16,+rcpc",
+             "--cfg=aes_armv8",
+             ]
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", '--cfg=curve25519_dalek_backend="simd"', "target-cpu=znver2", "target-feature=+aes,+ssse3,+fma,+bmi2,+avx2"]
+rustflags = ['--cfg=curve25519_dalek_backend="simd"', 
+             "-C", "target-cpu=znver2", 
+             "-C", "target-feature=+aes,+ssse3,+fma,+bmi2,+avx2"
+             ]
+        
