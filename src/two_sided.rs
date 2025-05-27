@@ -1,6 +1,6 @@
 use crate::aok::{
-    prove_shuffle_adapted, random_permutation, AdaptedShuffleHint, AdaptedShuffleProof,
-    BatchedDDHProof, PublicParams,
+    batched_ddh_prove, batched_ddh_verify, prove_shuffle_adapted, random_permutation,
+    verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof, BatchedDDHProof, PublicParams,
 };
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 use blake2::{Blake2s256, Digest};
@@ -10,8 +10,8 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use rand::RngCore;
+use std::collections::HashSet;
 use std::thread;
-
 enum Message {
     Round1([u8; 32]),
     Round2((EdwardsPoint, Vec<CompressedEdwardsY>)),
@@ -80,6 +80,7 @@ impl<'a> Party<'a> {
         }
 
         let sigma = hasher.finalize().into();
+
         (sigma, points, _points)
     }
 
@@ -89,8 +90,8 @@ impl<'a> Party<'a> {
         sigma_other: &[u8; 32],
         pk_other: &EdwardsPoint,
         _points_other: &Vec<CompressedEdwardsY>,
-        n_other: usize,
     ) -> (bool, Vec<EdwardsPoint>) {
+        let n_other = _points_other.len();
         let mut hasher = Blake2s256::new();
         let mut points_other: Vec<EdwardsPoint> = Vec::with_capacity(n_other);
         hasher.update(pk_other.compress().as_bytes());
@@ -109,8 +110,8 @@ impl<'a> Party<'a> {
         pp: &PublicParams,
         points_other: &Vec<EdwardsPoint>,
         _points_other: &Vec<CompressedEdwardsY>,
-        n_other: usize,
     ) -> (AdaptedShuffleProof, Vec<CompressedEdwardsY>) {
+        let n_other = _points_other.len();
         let mut _points_shuffled: Vec<CompressedEdwardsY> = Vec::with_capacity(n_other);
         for i in 0..n_other {
             let point = points_other[self.pi_inv[i]] * self.sk;
@@ -126,7 +127,7 @@ impl<'a> Party<'a> {
             &self.sk,
             &self.pi,
         );
-        return (proof_shuffle, _points_shuffled);
+        (proof_shuffle, _points_shuffled)
     }
 
     #[inline]
@@ -134,14 +135,67 @@ impl<'a> Party<'a> {
         &self,
         pp: &PublicParams,
         pk_other: &EdwardsPoint,
-        points: &Vec<EdwardsPoint>,
+        points: &Vec<EdwardsPoint>, // own points
         points_shuffle: &Vec<EdwardsPoint>,
         _points: &Vec<CompressedEdwardsY>,
+        _points_other: &Vec<CompressedEdwardsY>,
         _points_shuffled: &Vec<CompressedEdwardsY>,
         proof: &AdaptedShuffleProof,
-    ) {
+    ) -> Option<(Vec<CompressedEdwardsY>, Vec<u32>, BatchedDDHProof)> {
+        if !verify_shuffle_adapted(
+            pp,
+            pk_other,
+            points,
+            points_shuffle,
+            _points,
+            _points_shuffled,
+            proof,
+        ) {
+            return None;
+        }
+        let set: HashSet<CompressedEdwardsY> = _points_other.iter().cloned().collect();
+        let mut unblinded: Vec<EdwardsPoint> = Vec::with_capacity(self.n);
+        let mut _unblinded: Vec<CompressedEdwardsY> = Vec::with_capacity(self.n);
+        let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(self.n);
+        let mut ind: Vec<u32> = Vec::with_capacity(self.n);
+        for i in 0..self.n {
+            let ps = points_shuffle[i];
+            let _ps = _points_shuffled[i];
+            let p = ps * self.sk_inv;
+            let _p = p.compress();
+            if set.contains(&_p) {
+                unblinded.push(p);
+                _unblinded.push(_p);
+                ind.push(i as u32);
+                _shrinked.push(_ps);
+            }
+        }
+        let proof = batched_ddh_prove(&self.pk, &unblinded, &_unblinded, &_shrinked, &self.sk);
+
+        Some((_unblinded, ind, proof))
     }
 
     #[inline]
-    pub fn reveal_items(&self) {}
+    pub fn reveal_items(
+        &self,
+        pk_other: &EdwardsPoint,
+        unblinded: &Vec<EdwardsPoint>, //g
+        _unblinded: &Vec<CompressedEdwardsY>,
+        shrinked: &Vec<EdwardsPoint>, // h
+        _shrinked: &Vec<CompressedEdwardsY>,
+        proof: &BatchedDDHProof,
+    ) -> Option<Vec<u8>> {
+        if !batched_ddh_verify(pk_other, unblinded, shrinked, _unblinded, _shrinked, proof) {
+            return None;
+        }
+        let m = unblinded.len();
+        let mut output: Vec<u8> = Vec::with_capacity(m * 16);
+
+        for point in unblinded {
+            let item = recover_from_point(&(point * self.sk_8inv), self.permut);
+            output.extend_from_slice(&item);
+        }
+
+        Some(output)
+    }
 }
