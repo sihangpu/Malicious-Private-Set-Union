@@ -286,7 +286,7 @@ pub fn verify_shuffle_known(
 }
 
 #[inline]
-fn prove_shuffle_adapted_preprocess(
+pub fn prove_shuffle_adapted_preprocess(
     pp: &PublicParams,
     pi: &[usize],
     n: usize,
