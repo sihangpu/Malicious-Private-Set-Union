@@ -9,7 +9,7 @@ rustflags = ['--cfg=curve25519_dalek_backend="u64"',
              ]
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ['--cfg=curve25519_dalek_backend="simd"', 
+rustflags = ['--cfg=curve25519_dalek_backend="u64"', 
              "-C", "target-cpu=znver2", 
              "-C", "target-feature=+aes,+ssse3,+fma,+bmi2,+avx2"
              ]

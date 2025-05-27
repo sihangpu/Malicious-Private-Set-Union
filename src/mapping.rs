@@ -9,7 +9,6 @@ use curve25519_dalek::{
     traits::Identity,
     traits::VartimeMultiscalarMul,
 };
-use std::result;
 
 use lazy_static::lazy_static;
 use rand::prelude::*;
@@ -31,93 +30,19 @@ lazy_static! {
     static ref SC_INV_8: Scalar = Scalar::from(8u64).invert();
 }
 
-// Optimized direct mapping with reduced allocations, based on the direct map of Elligagor 2.
+// Hash from a bitstring to a point on (in Montgomery form) Curve25519 directly
+// Fast, the most efficient way to hash to a curve point.
 #[inline(always)]
-pub fn field_to_mont(r: &FieldElement) -> MontgomeryPoint {
-    // Pre-compute u² and reuse throughout
-    let u_squared = r.square();
-    let zu = &*FE_Z * &u_squared;
-    let v = &zu + &FieldElement::ONE;
-
-    // Batch related computations to reduce intermediate values
-    let v_squared = v.square();
-    let mut t3 = &*FE_A_SQUARED * &zu;
-    t3 -= &v_squared;
-    t3 *= &*FE_A;
-
-    let t1 = &v_squared * &v;
-    let (is_sq, inv) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &(&t3 * &t1));
-
-    // Use pre-computed constant
-    let mut u = &u_squared * &*FE_ZU_CONST;
-
-    // Conditional assignment
-    let one = FieldElement::ONE;
-    if is_sq.unwrap_u8() == 1 {
-        u = one;
-    }
-
-    // Final computation with fewer temporaries
-    let t1_squared = inv.square();
-    let mut x = u.neg();
-    x *= &*FE_A;
-    x *= &t3;
-    x *= &v_squared;
-    x *= &t1_squared;
-
-    MontgomeryPoint(x.as_bytes())
+pub fn hash_to_curve(input: &[u8]) -> MontgomeryPoint {
+    let r = hash_to_field(input);
+    field_to_mont(&r)
 }
 
-// Optimized inverse mapping, based on the inverse map of Elligagor 2.
+// Hash from a 128-bit string to a point (in Edwards form) on Curve25519
+// Slow, due to Montgomery <---> Edwards conversion
+// item has to be 16 bytes
 #[inline(always)]
-pub fn mont_to_field(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
-    let u = FieldElement::from_bytes(&p.to_bytes());
-
-    // Early exit check using pre-computed constant
-    if u == *FE_A_NEG {
-        return None;
-    }
-
-    let t = &u + &*FE_A;
-    let zu = &*FE_Z_NEG * &u;
-    let (is_sq, r) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &(&zu * &t));
-
-    if is_sq.unwrap_u8() == 0 {
-        return None;
-    }
-
-    // Compute both representatives efficiently
-    let tr = &t * &r;
-    let ur = &u * &r;
-
-    // Manual sign normalization
-    let r0 = if tr.is_negative().unwrap_u8() == 1 {
-        tr.neg()
-    } else {
-        tr
-    };
-    let r1 = if ur.is_negative().unwrap_u8() == 1 {
-        ur.neg()
-    } else {
-        ur
-    };
-
-    Some([r0, r1])
-}
-
-#[inline(always)]
-pub fn field_to_edwards(r: &FieldElement) -> EdwardsPoint {
-    // Convert to Montgomery and then to Edwards
-    field_to_mont(r).to_edwards(0u8).unwrap()
-}
-#[inline(always)]
-pub fn edwards_to_field(p: &EdwardsPoint) -> Option<[FieldElement; 2]> {
-    // Convert to Montgomery and then to field
-    mont_to_field(&p.to_montgomery())
-}
-
-#[inline(always)]
-pub fn hash_to_point(item: &[u8; 16], permut: &FeistelPrp256) -> EdwardsPoint {
+pub fn hash_to_point(item: &[u8], permut: &FeistelPrp256) -> EdwardsPoint {
     // Hash to field and then convert to Edwards
     let mut padded: [u8; 32] = [0u8; 32];
     padded[..16].copy_from_slice(item);
@@ -126,6 +51,8 @@ pub fn hash_to_point(item: &[u8; 16], permut: &FeistelPrp256) -> EdwardsPoint {
     field_to_edwards(&r)
 }
 
+// Recover from point (in Edwards form) on Curve25519 to a potential 128-bit string
+// Much slower, due to Montgomery <---> Edwards conversion, and the Edwards points enumeration (cofactor)
 #[inline(always)]
 pub fn recover_from_point(point: &EdwardsPoint, permut: &FeistelPrp256) -> [u8; 16] {
     // Convert Edwards point to Montgomery and then to field
@@ -159,6 +86,7 @@ fn check_bytes(bytes: &mut [u8; 32], permut: &FeistelPrp256, result: &mut [u8; 1
     }
     return false;
 }
+
 #[inline(always)]
 fn check_item(
     r0: &FieldElement,
@@ -191,9 +119,10 @@ fn check_item(
     }
     return false;
 }
-// Cache-friendly representative enumeration to handle 8-torsion points
+
+// Representative enumeration to handle 8-torsion points
 #[inline(always)]
-pub fn enumerate_edwards(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
+fn enumerate_edwards(p: &EdwardsPoint) -> [EdwardsPoint; 8] {
     let mut reps = [EdwardsPoint::identity(); 8];
 
     // Manual unroll for better optimization
@@ -282,15 +211,96 @@ impl FeistelPrp256 {
     }
 }
 
+// Hash from bitstring to a field element in 2^255-19
 #[inline(always)]
-pub fn hash_to_field(input: &[u8]) -> FieldElement {
+fn hash_to_field(input: &[u8]) -> FieldElement {
     let arr: [u8; 32] = Blake2s256::digest(input).into();
     FieldElement::from_bytes(&arr)
 }
+
+// Optimized direct mapping with reduced allocations, based on the direct map of Elligagor 2.
 #[inline(always)]
-pub fn hash_to_curve(input: &[u8]) -> MontgomeryPoint {
-    let r = hash_to_field(input);
-    field_to_mont(&r)
+fn field_to_mont(r: &FieldElement) -> MontgomeryPoint {
+    // Pre-compute u² and reuse throughout
+    let u_squared = r.square();
+    let zu = &*FE_Z * &u_squared;
+    let v = &zu + &FieldElement::ONE;
+
+    // Batch related computations to reduce intermediate values
+    let v_squared = v.square();
+    let mut t3 = &*FE_A_SQUARED * &zu;
+    t3 -= &v_squared;
+    t3 *= &*FE_A;
+
+    let t1 = &v_squared * &v;
+    let (is_sq, inv) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &(&t3 * &t1));
+
+    // Use pre-computed constant
+    let mut u = &u_squared * &*FE_ZU_CONST;
+
+    // Conditional assignment
+    let one = FieldElement::ONE;
+    if is_sq.unwrap_u8() == 1 {
+        u = one;
+    }
+
+    // Final computation with fewer temporaries
+    let t1_squared = inv.square();
+    let mut x = u.neg();
+    x *= &*FE_A;
+    x *= &t3;
+    x *= &v_squared;
+    x *= &t1_squared;
+
+    MontgomeryPoint(x.as_bytes())
+}
+
+// Optimized inverse mapping, based on the inverse map of Elligagor 2.
+#[inline(always)]
+fn mont_to_field(p: &MontgomeryPoint) -> Option<[FieldElement; 2]> {
+    let u = FieldElement::from_bytes(&p.to_bytes());
+
+    // Early exit check using pre-computed constant
+    if u == *FE_A_NEG {
+        return None;
+    }
+
+    let t = &u + &*FE_A;
+    let zu = &*FE_Z_NEG * &u;
+    let (is_sq, r) = FieldElement::sqrt_ratio_i(&FieldElement::ONE, &(&zu * &t));
+
+    if is_sq.unwrap_u8() == 0 {
+        return None;
+    }
+
+    // Compute both representatives efficiently
+    let tr = &t * &r;
+    let ur = &u * &r;
+
+    // Manual sign normalization
+    let r0 = if tr.is_negative().unwrap_u8() == 1 {
+        tr.neg()
+    } else {
+        tr
+    };
+    let r1 = if ur.is_negative().unwrap_u8() == 1 {
+        ur.neg()
+    } else {
+        ur
+    };
+
+    Some([r0, r1])
+}
+
+#[inline(always)]
+fn field_to_edwards(r: &FieldElement) -> EdwardsPoint {
+    // Convert to Montgomery and then to Edwards
+    field_to_mont(r).to_edwards(0u8).unwrap()
+}
+#[inline(always)]
+fn edwards_to_field(p: &EdwardsPoint) -> Option<[FieldElement; 2]> {
+    // Convert to Montgomery and then to field
+    mont_to_field(&p.to_montgomery())
 }
 
 // ========= Performance utilities =============
@@ -388,7 +398,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     let ed_round_trip_time = start.elapsed();
 
     // Benchmark hash to point and recover
-    let mut item = [235u8; 16];
+    let item = [235u8; 16];
     let permut = FeistelPrp256::new(&[7u8; 16]);
     let start = Instant::now();
     for _ in 0..iterations {
@@ -479,7 +489,7 @@ mod basic_tests {
         println!("✓ Scalar multiplication tests passed");
 
         // Test hash to point and recover
-        let mut item = [235u8; 16];
+        let item = [235u8; 16];
         let permut = FeistelPrp256::new(&[7u8; 16]);
         let point = hash_to_point(&item, &permut);
         let point2 = point.mul_by_cofactor() * &*SC_INV_8;

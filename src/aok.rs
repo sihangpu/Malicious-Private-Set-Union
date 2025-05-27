@@ -331,7 +331,6 @@ pub fn prove_shuffle_adapted(
     pk: &EdwardsPoint, // public key of the verifier, i.e., h in the figure; omit the base point g
     hint: &AdaptedShuffleHint,
     g: &[EdwardsPoint],
-    h: &[EdwardsPoint],
     _g: &[CompressedEdwardsY],
     _h: &[CompressedEdwardsY],
     s: &Scalar,
@@ -414,7 +413,7 @@ pub fn prove_shuffle_adapted(
 #[inline]
 pub fn verify_shuffle_adapted(
     pp: &PublicParams,
-    pk: &EdwardsPoint, // public key of the verifier
+    pk: &EdwardsPoint,
     g: &[EdwardsPoint],
     h: &[EdwardsPoint],
     _g: &[CompressedEdwardsY],
@@ -539,7 +538,6 @@ pub fn verify_shuffle_adapted(
 pub fn batched_ddh_prove(
     pk: &EdwardsPoint,
     g: &[EdwardsPoint],
-    h: &[EdwardsPoint],
     _g: &[CompressedEdwardsY],
     _h: &[CompressedEdwardsY],
     s: &Scalar,
@@ -713,7 +711,7 @@ mod adapted_shuffle_tests {
 
         let start = Instant::now();
         let proof: AdaptedShuffleProof =
-            prove_shuffle_adapted(&pp, &pk, &hint, &m, &m_shuffled, &m2, &m_shuffled2, &s, &pi);
+            prove_shuffle_adapted(&pp, &pk, &hint, &m, &m2, &m_shuffled2, &s, &pi);
         let prooftime = start.elapsed();
 
         let start = Instant::now();
@@ -754,7 +752,7 @@ mod batch_ddh_tests {
 
         // Prove and verify
         let start = Instant::now();
-        let proof = batched_ddh_prove(&pk, &g, &h, &g2, &h2, &s);
+        let proof = batched_ddh_prove(&pk, &g, &g2, &h2, &s);
         let prooftime = start.elapsed();
 
         let start = Instant::now();
