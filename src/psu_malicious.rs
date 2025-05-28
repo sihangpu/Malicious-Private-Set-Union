@@ -421,7 +421,7 @@ mod malicious {
 
         // worst case --> no intersection (percentage 0.0), reveal the entire set of the other party
         // best case  --> no set difference (percentage 1.0), so no batchDDHprove or recover_from_point
-        let (input_v, input_w) = generate_input(1.0, n);
+        let (input_v, input_w) = generate_input(0.0, n);
         let aes_key = [7u8; 16];
 
         let start = std::time::Instant::now();

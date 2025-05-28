@@ -286,24 +286,27 @@ mod semi_honest {
             .zip(m1s.into_iter())
             .collect::<Vec<(Block, Block)>>();
 
+        let start = std::time::Instant::now();
         let sender = Sender::new(input_s, n, n);
+        let offline = start.elapsed();
+
         let receiver = Receiver::new(input_r, n);
 
         let start = std::time::Instant::now();
         semi_honest_psu1(sender, receiver, ms);
         let duration = start.elapsed();
         println!(
-            "Semi-honest One-Sided-Output PSU completed in: {:?}",
-            duration
+            "Semi-honest One-Sided-Output PSU completed in: {:?}, offline time {:?}",
+            duration, offline
         );
     }
 }
 
-mod malicious_sender {
+mod sender_psu1 {
     use super::*;
     use rand::Rng;
     #[test]
-    fn sender_malicious_psu1_test() {
+    fn sender_psu1_test() {
         let n = SET_SIZE; // number of items, each 128-bit length
         let _n = n * 16;
         let mut rng = rand::thread_rng();
@@ -322,15 +325,19 @@ mod malicious_sender {
             .into_iter()
             .zip(m1s.into_iter())
             .collect::<Vec<(Block, Block)>>();
+
+        let start = std::time::Instant::now();
         let sender = Sender::new(input_s, n, n);
+        let offline = start.elapsed();
+
         let receiver = Receiver::new(input_r, n);
 
         let start = std::time::Instant::now();
         sender_malicious_psu1(sender, receiver, ms);
         let duration = start.elapsed();
         println!(
-            "Malicious (Sender) One-Sided-Output PSU completed in: {:?}",
-            duration
+            "Malicious (Sender) One-Sided-Output PSU completed in: {:?}, offline time {:?}",
+            duration, offline
         );
     }
 }
