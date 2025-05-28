@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::aok::random_permutation;
 use crate::mapping::hash_to_curve;
 use crate::otext::{otext, rand_block_vec};
-use crate::psumalicious::SET_SIZE;
+use crate::psu_malicious::SET_SIZE;
 
 use ocelot::ot::{KosReceiver, KosSender};
 use scuttlebutt::Block;
@@ -26,7 +26,9 @@ pub fn duplex<T>() -> (Duplex<T>, Duplex<T>) {
     (Duplex { tx: tx1, rx: rx2 }, Duplex { tx: tx2, rx: rx1 })
 }
 
-//shuffle OPRF
+// State-of-the-art semi-honest PSU from shuffle OPRF by using only Montgomery points on Curve25519
+// No need to convert between Montgomery <---> Edwards points, or compress/decompress Edwards points
+// Following [CZZ+24]
 pub struct Sender {
     input: Vec<u8>, // n input elements with each 128-bit length
     n: usize,       // number of items

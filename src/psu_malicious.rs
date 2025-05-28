@@ -4,7 +4,7 @@ use crate::aok::{
     BatchedDDHProof, PublicParams,
 };
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
-use crate::psusemi::{duplex, Duplex};
+use crate::psu_semi::{duplex, Duplex};
 
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::edwards::CompressedEdwardsY;
@@ -13,10 +13,11 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use lazy_static::lazy_static;
-use rand::RngCore;
+use rand::{seq::SliceRandom, Rng, RngCore};
 use std::collections::HashSet;
 use std::thread;
 
+// Set size (in balanced setting)
 pub const SET_SIZE: usize = 10_000;
 
 #[derive(Clone)]
@@ -37,6 +38,8 @@ lazy_static! {
     };
 }
 
+// Our highly efficient and fully malicious PSU with two-sided output
+// Symmetric protocol
 pub struct Party {
     input: Vec<u8>,           // n input elements with each 128-bit length
     n: usize,                 // number of items
@@ -293,6 +296,21 @@ fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
     None
 }
 
+pub fn malicious_psu2(left_party: Party, right_party: Party) -> Option<Vec<u8>> {
+    let (end_s, end_r) = duplex::<Message>();
+
+    let s_handle = thread::spawn(move || {
+        protocol(&right_party, &end_s);
+    });
+
+    let output = protocol(&left_party, &end_r);
+    println!("Finished!");
+
+    s_handle.join().unwrap();
+    return output;
+}
+
+// Check if the malicious PSU protocol ends with correct outputs
 fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>) -> bool {
     const BLOCK_LEN: usize = 16;
     assert!(
@@ -334,20 +352,68 @@ fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>
     true
 }
 
-pub fn malicious_psu2(left_party: Party, right_party: Party) -> Option<Vec<u8>> {
-    let (end_s, end_r) = duplex::<Message>();
-
-    let s_handle = thread::spawn(move || {
-        protocol(&right_party, &end_s);
-    });
-
-    let output = protocol(&left_party, &end_r);
-    println!("Finished!");
-
-    s_handle.join().unwrap();
-    return output;
+// Helper to generate a distinct random 16-byte block not in `seen`
+fn gen_block<R: Rng>(rng: &mut R, seen: &mut HashSet<[u8; 16]>) -> [u8; 16] {
+    loop {
+        let mut block = [0u8; 16];
+        rng.fill(&mut block);
+        if seen.insert(block) {
+            return block;
+        }
+    }
 }
 
+// Generate two parties' input with controlled intersection size
+fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) {
+    assert!(
+        (0.0..=1.0).contains(&intersection_percentage),
+        "percentage must be in [0.0, 1.0]"
+    );
+
+    let mut rng = rand::thread_rng();
+
+    // Determine number of common blocks
+    let common_count = ((intersection_percentage * n as f32).round() as usize).min(n);
+    let unique_v = n - common_count;
+    let unique_w = n - common_count;
+
+    //  Generate common blocks
+    let mut seen = HashSet::with_capacity(n * 2);
+    let mut common = Vec::with_capacity(common_count);
+    for _ in 0..common_count {
+        common.push(gen_block(&mut rng, &mut seen));
+    }
+
+    //  Generate unique blocks for V
+    let mut v_blocks = Vec::with_capacity(n);
+    v_blocks.extend(common.iter());
+    for _ in 0..unique_v {
+        v_blocks.push(gen_block(&mut rng, &mut seen));
+    }
+
+    //  Generate unique blocks for W
+    let mut w_blocks = Vec::with_capacity(n);
+    w_blocks.extend(common.iter());
+    for _ in 0..unique_w {
+        w_blocks.push(gen_block(&mut rng, &mut seen));
+    }
+
+    //  Shuffle both vectors
+    v_blocks.shuffle(&mut rng);
+    w_blocks.shuffle(&mut rng);
+
+    // Flatten blocks into bytes
+    let mut input_v = Vec::with_capacity(n * 16);
+    for block in v_blocks {
+        input_v.extend_from_slice(&block);
+    }
+    let mut input_w = Vec::with_capacity(n * 16);
+    for block in w_blocks {
+        input_w.extend_from_slice(&block);
+    }
+
+    (input_v, input_w)
+}
 mod malicious {
     use super::*;
     use rand::Rng;
@@ -355,12 +421,10 @@ mod malicious {
     fn malicious_psu2_test() {
         let n = SET_SIZE; // number of items, each 128-bit length
         let _n = n * 16;
-        let mut rng = rand::thread_rng();
 
-        let input_v: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
-        let input_w: Vec<u8> = (0.._n).map(|_| rng.gen()).collect(); // worst case --> no intersection, reveal the entire set of the other party
-                                                                     // best case --> no set difference, so no batchDDHprove or recover_from_point
-                                                                     // let input_w = input_v.clone();
+        // worst case --> no intersection (percentage 0.0), reveal the entire set of the other party
+        // best case  --> no set difference (percentage 1.0), so no batchDDHprove or recover_from_point
+        let (input_v, input_w) = generate_input(0.0, n);
         let aes_key = [7u8; 16];
 
         let left_party = Party::new(input_v.clone(), &aes_key, n, n);
