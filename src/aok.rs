@@ -13,6 +13,14 @@ pub struct PublicParams {
     pub f: Vec<EdwardsPoint>,
 }
 
+pub fn setup_params(n: usize) -> PublicParams {
+    let mut rng = thread_rng();
+    let f: Vec<EdwardsPoint> = (0..n)
+        .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+        .collect();
+    PublicParams { f }
+}
+
 #[derive(Clone)]
 pub struct KnownContentProof {
     pub _c_d: CompressedEdwardsY,
@@ -616,14 +624,6 @@ pub fn batched_ddh_verify(
 mod known_content_tests {
     use super::*;
 
-    fn setup_params(n: usize) -> PublicParams {
-        let mut rng = thread_rng();
-        let f: Vec<EdwardsPoint> = (0..n)
-            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
-            .collect();
-        PublicParams { f }
-    }
-
     #[test]
     fn shuffle_known_content_test() {
         use std::time::Instant;
@@ -673,13 +673,6 @@ mod known_content_tests {
 mod adapted_shuffle_tests {
     use super::*;
 
-    fn setup_params(n: usize) -> PublicParams {
-        let mut rng = thread_rng();
-        let f: Vec<EdwardsPoint> = (0..n)
-            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
-            .collect();
-        PublicParams { f }
-    }
     #[test]
     fn test_adapted_shuffle() {
         use std::time::Instant;

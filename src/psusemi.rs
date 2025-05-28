@@ -5,11 +5,26 @@ use std::collections::HashSet;
 use crate::aok::random_permutation;
 use crate::mapping::hash_to_curve;
 use crate::otext::{otext, rand_block_vec};
+use crate::psumalicious::SET_SIZE;
 
 use ocelot::ot::{KosReceiver, KosSender};
 use scuttlebutt::Block;
 use std::sync::mpsc::{channel, Receiver as MpscReceiver, Sender as MpscSender};
 use std::thread;
+
+pub struct Duplex<T> {
+    pub tx: MpscSender<T>,
+    pub rx: MpscReceiver<T>,
+}
+/// Creates a pair of opposite endpoints:
+/// - `a.tx` → feeds into `b.rx`
+/// - `b.tx` → feeds into `a.rx`
+#[inline]
+pub fn duplex<T>() -> (Duplex<T>, Duplex<T>) {
+    let (tx1, rx1) = channel();
+    let (tx2, rx2) = channel();
+    (Duplex { tx: tx1, rx: rx2 }, Duplex { tx: tx2, rx: rx1 })
+}
 
 //shuffle OPRF
 pub struct Sender {
@@ -27,19 +42,6 @@ pub struct Receiver {
 
 pub struct Message {
     pub points: Vec<MontgomeryPoint>,
-}
-pub struct Duplex<T> {
-    pub tx: MpscSender<T>,
-    pub rx: MpscReceiver<T>,
-}
-/// Creates a pair of opposite endpoints:
-/// - `a.tx` → feeds into `b.rx`
-/// - `b.tx` → feeds into `a.rx`
-#[inline]
-pub fn duplex<T>() -> (Duplex<T>, Duplex<T>) {
-    let (tx1, rx1) = channel();
-    let (tx2, rx2) = channel();
-    (Duplex { tx: tx1, rx: rx2 }, Duplex { tx: tx2, rx: rx1 })
 }
 
 impl Sender {
@@ -115,7 +117,7 @@ impl Receiver {
     }
 }
 
-pub fn semi_honest_psu(sender: Sender, receiver: Receiver, ms: Vec<(Block, Block)>) {
+pub fn semi_honest_psu1(sender: Sender, receiver: Receiver, ms: Vec<(Block, Block)>) {
     let (end_s, end_r) = duplex();
 
     let s_handle = thread::spawn(move || {
@@ -144,12 +146,12 @@ pub fn semi_honest_psu(sender: Sender, receiver: Receiver, ms: Vec<(Block, Block
     otext::<KosSender, KosReceiver>(&indicator, ms.clone());
 }
 
-mod semi_honest_test {
+mod semi_honest {
     use super::*;
     use rand::Rng;
     #[test]
-    fn test_semi_honest_psu() {
-        let n = 10_000; // number of items, each 128-bit length
+    fn semi_honest_psu1_test() {
+        let n = SET_SIZE; // number of items, each 128-bit length
         let _n = n * 16;
         let mut rng = rand::thread_rng();
         let input_s: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
@@ -174,8 +176,11 @@ mod semi_honest_test {
         let receiver = Receiver::new(input_r, n);
 
         let start = std::time::Instant::now();
-        semi_honest_psu(sender, receiver, ms);
+        semi_honest_psu1(sender, receiver, ms);
         let duration = start.elapsed();
-        println!("Semi-honest PSU completed in: {:?}", duration);
+        println!(
+            "Semi-honest One-Sided-Output PSU completed in: {:?}",
+            duration
+        );
     }
 }

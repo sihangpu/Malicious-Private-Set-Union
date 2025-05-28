@@ -1,0 +1,382 @@
+use crate::aok::{
+    batched_ddh_prove, batched_ddh_verify, prove_shuffle_adapted, prove_shuffle_adapted_preprocess,
+    random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
+    BatchedDDHProof, PublicParams,
+};
+use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
+use crate::psusemi::{duplex, Duplex};
+
+use blake2::{Blake2s256, Digest};
+use curve25519_dalek::edwards::CompressedEdwardsY;
+use curve25519_dalek::{
+    edwards::EdwardsPoint,
+    scalar::{clamp_integer, Scalar},
+};
+use lazy_static::lazy_static;
+use rand::RngCore;
+use std::collections::HashSet;
+use std::thread;
+
+pub const SET_SIZE: usize = 10_000;
+
+#[derive(Clone)]
+enum Message {
+    Round1([u8; 32]),
+    Round2((EdwardsPoint, Vec<CompressedEdwardsY>)),
+    Round3((AdaptedShuffleProof, Vec<CompressedEdwardsY>)),
+    Round4((BatchedDDHProof, Vec<CompressedEdwardsY>, Vec<u32>)),
+}
+
+lazy_static! {
+    static ref PP: PublicParams = {
+        let mut rng = rand::thread_rng();
+        let f: Vec<EdwardsPoint> = (0..SET_SIZE)
+            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+            .collect();
+        PublicParams { f }
+    };
+}
+
+pub struct Party {
+    input: Vec<u8>,           // n input elements with each 128-bit length
+    n: usize,                 // number of items
+    sk_8: [u8; 32],           // the clamped integer (8 * sk)
+    sk: Scalar,               // secret key
+    sk_inv: Scalar,           // secret key inverse
+    sk_8inv: Scalar,          // 1/(8* sk)
+    pk: EdwardsPoint,         // pk
+    pi: Vec<usize>,           // permutation indices
+    pi_inv: Vec<usize>,       // inverse permutation indices
+    hint: AdaptedShuffleHint, // hint for the adapted shuffle
+    permut: FeistelPrp256,    // ideal permutation
+}
+
+impl Party {
+    pub fn new(input: Vec<u8>, aes_key: &[u8; 16], n: usize, n_other: usize) -> Self {
+        let mut raw = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut raw);
+        let sk_8 = clamp_integer(raw);
+        let sk = Scalar::from_bytes_mod_order(sk_8) * Scalar::from(8u64).invert();
+        let sk_inv = sk.invert();
+        let sk_8inv = sk_inv * Scalar::from(8u64).invert();
+        let pk = EdwardsPoint::mul_base(&sk);
+        let (pi, pi_inv) = random_permutation(n_other);
+        let permut = FeistelPrp256::new(&aes_key);
+        let hint = prove_shuffle_adapted_preprocess(&PP, &pi, n);
+        Self {
+            input,
+            n,
+            sk_8,
+            sk,
+            sk_inv,
+            sk_8inv,
+            pk,
+            pi,
+            pi_inv,
+            hint,
+            permut,
+        }
+    }
+
+    #[inline]
+    pub fn gen(&self) -> ([u8; 32], Vec<EdwardsPoint>, Vec<CompressedEdwardsY>) {
+        let mut points: Vec<EdwardsPoint> = Vec::with_capacity(self.n);
+        let mut _points: Vec<CompressedEdwardsY> = Vec::with_capacity(self.n);
+        let mut hasher = Blake2s256::new();
+
+        hasher.update(self.pk.compress().as_bytes());
+
+        for item in self.input.chunks_exact(16) {
+            let point = hash_to_point(item, &self.permut).mul_clamped(self.sk_8);
+            let _point = point.compress();
+            points.push(point);
+            _points.push(_point);
+            hasher.update(_point.as_bytes());
+        }
+
+        let sigma = hasher.finalize().into();
+
+        (sigma, points, _points)
+    }
+
+    #[inline]
+    pub fn verify_sigma(
+        &self,
+        sigma_other: &[u8; 32],
+        pk_other: &EdwardsPoint,
+        _points_other: &Vec<CompressedEdwardsY>,
+    ) -> (bool, Vec<EdwardsPoint>) {
+        let n_other = _points_other.len();
+        let mut hasher = Blake2s256::new();
+        let mut points_other: Vec<EdwardsPoint> = Vec::with_capacity(n_other);
+        hasher.update(pk_other.compress().as_bytes());
+        for _p_other in _points_other {
+            hasher.update(_p_other.as_bytes());
+            points_other.push(_p_other.decompress().unwrap());
+        }
+        let sigma: [u8; 32] = hasher.finalize().into();
+
+        return (sigma.eq(sigma_other), points_other);
+    }
+
+    #[inline]
+    pub fn blind_shuffle(
+        &self,
+        pp: &PublicParams,
+        points_other: &Vec<EdwardsPoint>,
+        _points_other: &Vec<CompressedEdwardsY>,
+    ) -> (
+        AdaptedShuffleProof,
+        Vec<EdwardsPoint>,
+        Vec<CompressedEdwardsY>,
+    ) {
+        let n_other = _points_other.len();
+        let mut _points_shuffled: Vec<CompressedEdwardsY> = Vec::with_capacity(n_other);
+        let mut points_shuffled: Vec<EdwardsPoint> = Vec::with_capacity(n_other);
+        for i in 0..n_other {
+            let point = points_other[self.pi_inv[i]] * self.sk;
+            points_shuffled.push(point);
+            _points_shuffled.push(point.compress());
+        }
+        let proof_shuffle = prove_shuffle_adapted(
+            pp,
+            &self.pk,
+            &self.hint,
+            &points_other,
+            &_points_other,
+            &_points_shuffled,
+            &self.sk,
+            &self.pi,
+        );
+        (proof_shuffle, points_shuffled, _points_shuffled)
+    }
+
+    #[inline]
+    pub fn final_response(
+        &self,
+        pp: &PublicParams,
+        pk_other: &EdwardsPoint,
+        points: &Vec<EdwardsPoint>,         // own points, x
+        points_shuffle: &Vec<EdwardsPoint>, //e=x^{k_1}
+        _points: &Vec<CompressedEdwardsY>,
+        _points_shuffled: &Vec<CompressedEdwardsY>,
+        _points_other: &Vec<CompressedEdwardsY>, //y
+        proof: &AdaptedShuffleProof,
+    ) -> Option<(Vec<CompressedEdwardsY>, Vec<u32>, BatchedDDHProof)> {
+        if !verify_shuffle_adapted(
+            pp,
+            pk_other,
+            points,
+            points_shuffle,
+            _points,
+            _points_shuffled,
+            proof,
+        ) {
+            return None;
+        }
+        let set: HashSet<CompressedEdwardsY> = _points_other.iter().cloned().collect();
+        let mut unblinded: Vec<EdwardsPoint> = Vec::with_capacity(self.n);
+        let mut _unblinded: Vec<CompressedEdwardsY> = Vec::with_capacity(self.n);
+        let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(self.n);
+        let mut ind: Vec<u32> = Vec::with_capacity(self.n);
+        for i in 0..self.n {
+            let ps = points_shuffle[i];
+            let _ps = _points_shuffled[i];
+            let p = ps * self.sk_inv;
+            let _p = p.compress();
+            if !set.contains(&_p) {
+                unblinded.push(p);
+                _unblinded.push(_p);
+                ind.push(i as u32);
+                _shrinked.push(_ps);
+            }
+        }
+        let proof = batched_ddh_prove(&self.pk, &unblinded, &_unblinded, &_shrinked, &self.sk);
+
+        Some((_unblinded, ind, proof))
+    }
+
+    #[inline]
+    pub fn reveal_items(
+        &self,
+        pk_other: &EdwardsPoint,
+        unblinded: &Vec<EdwardsPoint>, //g
+        _unblinded: &Vec<CompressedEdwardsY>,
+        shrinked: &Vec<EdwardsPoint>, // h
+        _shrinked: &Vec<CompressedEdwardsY>,
+        proof: &BatchedDDHProof,
+    ) -> Option<Vec<u8>> {
+        if !batched_ddh_verify(pk_other, unblinded, shrinked, _unblinded, _shrinked, proof) {
+            return None;
+        }
+        let m = unblinded.len();
+        let mut output: Vec<u8> = Vec::with_capacity(m * 16);
+
+        for point in unblinded {
+            let item = recover_from_point(&(point * self.sk_8inv), &self.permut);
+            output.extend_from_slice(&item);
+        }
+
+        Some(output)
+    }
+}
+
+fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
+    let (sigma, points, _points) = party.gen();
+    // Round 1
+    end.tx.send(Message::Round1(sigma)).unwrap();
+    if let Message::Round1(right_sigma) = end.rx.recv().unwrap() {
+        //  Round 2
+        end.tx
+            .send(Message::Round2((party.pk, _points.clone())))
+            .unwrap();
+        if let Message::Round2((right_pk, _right_points)) = end.rx.recv().unwrap() {
+            let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
+            if !valid {
+                println!("First round commitment verification failed!");
+                return None;
+            }
+            let (proof1, right_shuffled, _right_shuffled) =
+                party.blind_shuffle(&PP, &right_points, &_right_points);
+
+            // Round 3
+            end.tx
+                .send(Message::Round3((proof1, _right_shuffled.clone())))
+                .unwrap();
+            if let Message::Round3((right_proof1, _shuffled)) = end.rx.recv().unwrap() {
+                let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
+
+                if let Some((_unblinded, ind, proof2)) = party.final_response(
+                    &PP,
+                    &right_pk,
+                    &points,
+                    &shuffled,
+                    &_points,
+                    &_shuffled,
+                    &_right_points,
+                    &right_proof1,
+                ) {
+                    // Round 4
+                    end.tx
+                        .send(Message::Round4((proof2, _unblinded, ind)))
+                        .unwrap();
+                    if let Message::Round4((right_proof2, _right_unblinded, right_ind)) =
+                        end.rx.recv().unwrap()
+                    {
+                        let right_size = right_ind.len();
+                        let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
+                        let mut shrinked: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
+                        let mut right_unblinded: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
+                        for i in 0..right_size {
+                            let j = right_ind[i] as usize;
+                            right_unblinded.push(_right_unblinded[i].decompress().unwrap());
+                            shrinked.push(right_shuffled[j]);
+                            _shrinked.push(_right_shuffled[j]);
+                        }
+                        let output = party.reveal_items(
+                            &right_pk,
+                            &right_unblinded,
+                            &_right_unblinded,
+                            &shrinked,
+                            &_shrinked,
+                            &right_proof2,
+                        );
+                        return output;
+                    }
+                } else {
+                    print!("Adapted shuffle verification failed!");
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
+
+fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>) -> bool {
+    const BLOCK_LEN: usize = 16;
+    assert!(
+        input_v.len() % BLOCK_LEN == 0,
+        "input_v length must be multiple of 16"
+    );
+    assert!(
+        input_w.len() % BLOCK_LEN == 0,
+        "input_w length must be multiple of 16"
+    );
+    assert!(
+        recovered_w.len() % BLOCK_LEN == 0,
+        "recovered_w length must be multiple of 16"
+    );
+
+    // Build hash sets of blocks for input_v and input_w
+    let mut set_v: HashSet<[u8; BLOCK_LEN]> = HashSet::with_capacity(input_v.len() / BLOCK_LEN);
+    for chunk in input_v.chunks_exact(BLOCK_LEN) {
+        set_v.insert(chunk.try_into().unwrap());
+    }
+
+    let mut set_w: HashSet<[u8; BLOCK_LEN]> = HashSet::with_capacity(input_w.len() / BLOCK_LEN);
+    for chunk in input_w.chunks_exact(BLOCK_LEN) {
+        set_w.insert(chunk.try_into().unwrap());
+    }
+
+    // Check each recovered block
+    for chunk in recovered_w.chunks_exact(BLOCK_LEN) {
+        let block: [u8; BLOCK_LEN] = chunk.try_into().unwrap();
+        if !set_w.contains(&block) {
+            // Not present in input_w
+            return false;
+        }
+        if set_v.contains(&block) {
+            // Present in input_v, so not in the set difference
+            return false;
+        }
+    }
+    true
+}
+
+pub fn malicious_psu2(left_party: Party, right_party: Party) -> Option<Vec<u8>> {
+    let (end_s, end_r) = duplex::<Message>();
+
+    let s_handle = thread::spawn(move || {
+        protocol(&right_party, &end_s);
+    });
+
+    let output = protocol(&left_party, &end_r);
+    println!("Finished!");
+
+    s_handle.join().unwrap();
+    return output;
+}
+
+mod malicious {
+    use super::*;
+    use rand::Rng;
+    #[test]
+    fn malicious_psu2_test() {
+        let n = SET_SIZE; // number of items, each 128-bit length
+        let _n = n * 16;
+        let mut rng = rand::thread_rng();
+
+        let input_v: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
+        let input_w: Vec<u8> = (0.._n).map(|_| rng.gen()).collect(); // worst case --> no intersection, reveal the entire set of the other party
+                                                                     // best case --> no set difference, so no batchDDHprove or recover_from_point
+                                                                     // let input_w = input_v.clone();
+        let aes_key = [7u8; 16];
+
+        let left_party = Party::new(input_v.clone(), &aes_key, n, n);
+        let right_party = Party::new(input_w.clone(), &aes_key, n, n);
+
+        let start = std::time::Instant::now();
+        let recovered_w = malicious_psu2(left_party, right_party);
+        let duration = start.elapsed();
+
+        assert!(
+            correctness_check(&input_v, &input_w, &recovered_w.unwrap()),
+            "Incorrect output!"
+        );
+        println!(
+            "Malicious Two-Sided-Output PSU completed in: {:?}.",
+            duration
+        );
+    }
+}
