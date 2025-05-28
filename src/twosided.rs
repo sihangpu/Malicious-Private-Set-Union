@@ -4,7 +4,7 @@ use crate::aok::{
     BatchedDDHProof, PublicParams,
 };
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
-use crate::psu_semi::{duplex, Duplex};
+use crate::onesided::{duplex, Duplex};
 
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::edwards::CompressedEdwardsY;
@@ -359,9 +359,10 @@ fn gen_block<R: Rng>(rng: &mut R) -> [u8; 16] {
     rng.fill(&mut block);
     block
 }
-#[inline]
+
 // Generate two parties' input with controlled intersection size
-fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) {
+#[inline]
+pub fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) {
     assert!(
         (0.0..=1.0).contains(&intersection_percentage),
         "percentage must be in [0.0, 1.0]"
@@ -410,7 +411,7 @@ fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) 
     (input_v, input_w)
 }
 
-mod malicious {
+mod twosided {
     use super::*;
     use rand::Rng;
     #[test]

@@ -7,6 +7,7 @@ edition = "2021"
 curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core", "serde","zeroize"] }
 ocelot = {path = "./swanky-dev/ocelot" }
 scuttlebutt = { path = "./swanky-dev/scuttlebutt" }
+vectoreyes = {path="./swanky-dev/vectoreyes"}
 subtle = "2.4"
 lazy_static = "1.4"
 rand=  "0.8"
