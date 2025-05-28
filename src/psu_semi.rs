@@ -157,7 +157,7 @@ mod semi_honest {
         let _n = n * 16;
         let mut rng = rand::thread_rng();
         let input_s: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
-        // let input_r: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
+        let input_r: Vec<u8> = (0.._n).map(|_| rng.gen()).collect();
 
         let m0s: Vec<Block> = input_s
             .chunks_exact(16)
@@ -173,7 +173,6 @@ mod semi_honest {
             .zip(m1s.into_iter())
             .collect::<Vec<(Block, Block)>>();
 
-        let input_r = input_s.clone();
         let sender = Sender::new(input_s, n, n);
         let receiver = Receiver::new(input_r, n);
 

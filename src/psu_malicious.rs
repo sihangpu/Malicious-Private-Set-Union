@@ -352,17 +352,14 @@ fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>
     true
 }
 
-// Helper to generate a distinct random 16-byte block not in `seen`
-fn gen_block<R: Rng>(rng: &mut R, seen: &mut HashSet<[u8; 16]>) -> [u8; 16] {
-    loop {
-        let mut block = [0u8; 16];
-        rng.fill(&mut block);
-        if seen.insert(block) {
-            return block;
-        }
-    }
+// Helper to generate a random 16-byte block
+#[inline]
+fn gen_block<R: Rng>(rng: &mut R) -> [u8; 16] {
+    let mut block = [0u8; 16];
+    rng.fill(&mut block);
+    block
 }
-
+#[inline]
 // Generate two parties' input with controlled intersection size
 fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) {
     assert!(
@@ -371,31 +368,29 @@ fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) 
     );
 
     let mut rng = rand::thread_rng();
-
     // Determine number of common blocks
     let common_count = ((intersection_percentage * n as f32).round() as usize).min(n);
     let unique_v = n - common_count;
     let unique_w = n - common_count;
 
     //  Generate common blocks
-    let mut seen = HashSet::with_capacity(n * 2);
     let mut common = Vec::with_capacity(common_count);
     for _ in 0..common_count {
-        common.push(gen_block(&mut rng, &mut seen));
+        common.push(gen_block(&mut rng));
     }
 
-    //  Generate unique blocks for V
+    //  Generate random blocks for V
     let mut v_blocks = Vec::with_capacity(n);
     v_blocks.extend(common.iter());
     for _ in 0..unique_v {
-        v_blocks.push(gen_block(&mut rng, &mut seen));
+        v_blocks.push(gen_block(&mut rng));
     }
 
-    //  Generate unique blocks for W
+    //  Generate random blocks for W
     let mut w_blocks = Vec::with_capacity(n);
     w_blocks.extend(common.iter());
     for _ in 0..unique_w {
-        w_blocks.push(gen_block(&mut rng, &mut seen));
+        w_blocks.push(gen_block(&mut rng));
     }
 
     //  Shuffle both vectors
@@ -414,6 +409,7 @@ fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u8>) 
 
     (input_v, input_w)
 }
+
 mod malicious {
     use super::*;
     use rand::Rng;
@@ -421,10 +417,11 @@ mod malicious {
     fn malicious_psu2_test() {
         let n = SET_SIZE; // number of items, each 128-bit length
         let _n = n * 16;
+        let mut rng = rand::thread_rng();
 
         // worst case --> no intersection (percentage 0.0), reveal the entire set of the other party
         // best case  --> no set difference (percentage 1.0), so no batchDDHprove or recover_from_point
-        let (input_v, input_w) = generate_input(0.0, n);
+        let (input_v, input_w) = generate_input(1.0, n);
         let aes_key = [7u8; 16];
 
         let left_party = Party::new(input_v.clone(), &aes_key, n, n);
