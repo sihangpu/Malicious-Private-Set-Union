@@ -424,7 +424,10 @@ mod malicious {
         let (input_v, input_w) = generate_input(1.0, n);
         let aes_key = [7u8; 16];
 
+        let start = std::time::Instant::now();
         let left_party = Party::new(input_v.clone(), &aes_key, n, n);
+        let offline_time = start.elapsed();
+
         let right_party = Party::new(input_w.clone(), &aes_key, n, n);
 
         let start = std::time::Instant::now();
@@ -436,8 +439,8 @@ mod malicious {
             "Incorrect output!"
         );
         println!(
-            "Malicious Two-Sided-Output PSU completed in: {:?}.",
-            duration
+            "Malicious Two-Sided-Output PSU completed in: {:?}, with offline time {:?}",
+            duration, offline_time
         );
     }
 }
