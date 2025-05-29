@@ -141,7 +141,7 @@ impl PartyReceiver {
     }
 }
 
-pub struct MsPSender {
+pub struct PartySender1M {
     input: Vec<u8>, // n input elements with each 128-bit length
     n: usize,       // number of items
     sk_8: [u8; 32], // for clamping
@@ -149,14 +149,14 @@ pub struct MsPSender {
     pi: Vec<usize>, // permutation indices
 }
 
-pub struct MsPReceiver {
+pub struct PartyReceiver1M {
     input: Vec<u8>,
     n: usize,
     sk_8: [u8; 32], // for clamping
     sk: Scalar,     // secret key
 }
 
-impl MsPSender {
+impl PartySender1M {
     pub fn new(input: Vec<u8>, n: usize, recv_size: usize) -> Self {
         let mut buff = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut buff);
@@ -210,7 +210,7 @@ impl MsPSender {
     }
 }
 
-impl MsPReceiver {
+impl PartyReceiver1M {
     pub fn new(input: Vec<u8>, n: usize) -> Self {
         let mut buff = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut buff);
@@ -379,7 +379,11 @@ fn combine_array(low: &[u8; 16], high: &[u8; 16]) -> [u8; 32] {
     arr32
 }
 
-pub fn sender_malicious_psu1(sender: MsPSender, receiver: MsPReceiver, ms: Vec<(Block, Block)>) {
+pub fn sender_malicious_psu1(
+    sender: PartySender1M,
+    receiver: PartyReceiver1M,
+    ms: Vec<(Block, Block)>,
+) {
     let (end_s, end_r) = duplex();
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -539,10 +543,10 @@ mod onesided {
             .collect::<Vec<(Block, Block)>>();
 
         let start = std::time::Instant::now();
-        let sender = MsPSender::new(input_s, n, n);
+        let sender = PartySender1M::new(input_s, n, n);
         let offline = start.elapsed();
 
-        let receiver = MsPReceiver::new(input_r, n);
+        let receiver = PartyReceiver1M::new(input_r, n);
 
         let start = std::time::Instant::now();
         sender_malicious_psu1(sender, receiver, ms);

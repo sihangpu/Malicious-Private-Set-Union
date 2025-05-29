@@ -304,7 +304,7 @@ pub fn malicious_psu2(left_party: Party, right_party: Party) -> Option<Vec<u8>> 
     });
 
     let output = protocol(&left_party, &end_r);
-    println!("Finished!");
+    // println!("Finished!");
 
     s_handle.join().unwrap();
     return output;
@@ -418,7 +418,6 @@ mod twosided {
     fn malicious_psu2_test() {
         let n = SET_SIZE; // number of items, each 128-bit length
         let _n = n * 16;
-        let mut rng = rand::thread_rng();
 
         // worst case --> no intersection (percentage 0.0), reveal the entire set of the other party
         // best case  --> no set difference (percentage 1.0), so no batchDDHprove or recover_from_point
