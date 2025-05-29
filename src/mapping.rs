@@ -444,7 +444,7 @@ mod basic_tests {
 
     #[test]
     fn correctness_test() {
-        let bytes = [7u8; 32];
+        let bytes = [5u8; 32];
         let r = FieldElement::from_bytes(&bytes);
 
         // Test correctness
@@ -458,8 +458,9 @@ mod basic_tests {
             panic!("No preimage exists for the given point");
         }
 
-        let e1 = p1.to_edwards(0u8).unwrap().mul_by_cofactor();
+        let e1 = p1.to_edwards(1u8).unwrap().mul_by_cofactor();
         let e2 = e1 * &*SC_INV_8;
+        assert!(p1 * Scalar::from(56u8) == (e1 * Scalar::from(7u8)).to_montgomery());
 
         let reps = enumerate_edwards(&e2);
 
@@ -480,13 +481,23 @@ mod basic_tests {
         }
         assert!(found);
 
-        // Test sclars and clamped integer multiplication
+        // Test scalars and clamped integer multiplication
         let k_8 = [8u8; 32];
         let k = Scalar::from_bytes_mod_order(clamp_integer(k_8)) * *SC_INV_8;
         let e2_ = e2.clone() * k * k * Scalar::from(8u64);
         let e2_8kk = e2.mul_clamped(k_8) * k;
         assert_eq!(e2_8kk, e2_);
         println!("✓ Scalar multiplication tests passed");
+
+        let s = Scalar::random(&mut OsRng);
+        let r = Scalar::random(&mut OsRng);
+        let c = Scalar::random(&mut OsRng);
+        let g = e2 * Scalar::from(79u8);
+        let h = g * s;
+        let gr = g * r;
+        let z = r - s * c;
+        assert!(gr == (g * z + h * c));
+        println!("✓ PoK for DL tests passed");
 
         // Test hash to point and recover
         let item = [235u8; 16];
