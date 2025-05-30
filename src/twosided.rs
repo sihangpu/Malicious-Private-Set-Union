@@ -426,7 +426,7 @@ mod twosided {
 
         let start = std::time::Instant::now();
         let left_party = Party::new(input_v.clone(), &aes_key, pp, n, n);
-        let offline_time = start.elapsed();
+        let offline = start.elapsed();
 
         let right_party = Party::new(input_w.clone(), &aes_key, pp, n, n);
 
@@ -439,8 +439,8 @@ mod twosided {
             "Incorrect output!"
         );
         println!(
-            "Malicious Two-Sided-Output PSU completed in: {:?}, with offline time {:?}",
-            duration, offline_time
+            "Malicious Two-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}",
+            n, duration, offline
         );
     }
 }

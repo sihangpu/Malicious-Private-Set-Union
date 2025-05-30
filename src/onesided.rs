@@ -520,8 +520,8 @@ mod onesided {
         semi_honest_psu1(sender, receiver, ms);
         let duration = start.elapsed();
         println!(
-            "Semi-honest One-Sided-Output PSU completed in: {:?}, offline time {:?}",
-            duration, offline
+            "Semi-honest One-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}",
+            n, duration, offline
         );
     }
 
@@ -556,7 +556,7 @@ mod onesided {
         sender_malicious_psu1(sender, receiver, ms);
         let duration = start.elapsed();
         println!(
-            "Malicious (Sender) One-Sided-Output PSU completed in: {:?}, offline time {:?}",
+            "Malicious (Sender) One-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}", n,
             duration, offline
         );
     }
