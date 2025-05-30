@@ -1,7 +1,7 @@
 use crate::aok::{
-    batched_ddh_prove, batched_ddh_verify, prove_shuffle_adapted, prove_shuffle_adapted_preprocess,
-    random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
-    BatchedDDHProof, PublicParams,
+    batched_ddh_prove, batched_ddh_verify, parse_power_or_letter, prove_shuffle_adapted,
+    prove_shuffle_adapted_preprocess, pub_params, random_permutation, setup_params,
+    verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof, BatchedDDHProof, PublicParams,
 };
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 use crate::onesided::{duplex, Duplex};
@@ -12,13 +12,9 @@ use curve25519_dalek::{
     edwards::EdwardsPoint,
     scalar::{clamp_integer, Scalar},
 };
-use lazy_static::lazy_static;
 use rand::{seq::SliceRandom, Rng, RngCore};
 use std::collections::HashSet;
 use std::thread;
-
-// Set size (in balanced setting)
-pub const SET_SIZE: usize = 10_000;
 
 #[derive(Clone)]
 enum Message {
@@ -26,16 +22,6 @@ enum Message {
     Round2((EdwardsPoint, Vec<CompressedEdwardsY>)),
     Round3((AdaptedShuffleProof, Vec<CompressedEdwardsY>)),
     Round4((BatchedDDHProof, Vec<CompressedEdwardsY>, Vec<u32>)),
-}
-
-lazy_static! {
-    static ref PP: PublicParams = {
-        let mut rng = rand::thread_rng();
-        let f: Vec<EdwardsPoint> = (0..SET_SIZE)
-            .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
-            .collect();
-        PublicParams { f }
-    };
 }
 
 // Our highly efficient and fully malicious PSU with two-sided output
@@ -55,7 +41,13 @@ pub struct Party {
 }
 
 impl Party {
-    pub fn new(input: Vec<u8>, aes_key: &[u8; 16], n: usize, n_other: usize) -> Self {
+    pub fn new(
+        input: Vec<u8>,
+        aes_key: &[u8; 16],
+        pp: &PublicParams,
+        n: usize,
+        n_other: usize,
+    ) -> Self {
         let mut raw = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut raw);
         let sk_8 = clamp_integer(raw);
@@ -65,7 +57,7 @@ impl Party {
         let pk = EdwardsPoint::mul_base(&sk);
         let (pi, pi_inv) = random_permutation(n_other);
         let permut = FeistelPrp256::new(&aes_key);
-        let hint = prove_shuffle_adapted_preprocess(&PP, &pi, n);
+        let hint = prove_shuffle_adapted_preprocess(pp, &pi, n);
         Self {
             input,
             n,
@@ -224,7 +216,7 @@ impl Party {
     }
 }
 
-fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
+fn protocol(party: &Party, end: &Duplex<Message>, pp: &PublicParams) -> Option<Vec<u8>> {
     let (sigma, points, _points) = party.gen();
     // Round 1
     end.tx.send(Message::Round1(sigma)).unwrap();
@@ -240,7 +232,7 @@ fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
                 return None;
             }
             let (proof1, right_shuffled, _right_shuffled) =
-                party.blind_shuffle(&PP, &right_points, &_right_points);
+                party.blind_shuffle(&pp, &right_points, &_right_points);
 
             // Round 3
             end.tx
@@ -250,7 +242,7 @@ fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
                 let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
 
                 if let Some((_unblinded, ind, proof2)) = party.final_response(
-                    &PP,
+                    &pp,
                     &right_pk,
                     &points,
                     &shuffled,
@@ -296,14 +288,18 @@ fn protocol(party: &Party, end: &Duplex<Message>) -> Option<Vec<u8>> {
     None
 }
 
-pub fn malicious_psu2(left_party: Party, right_party: Party) -> Option<Vec<u8>> {
+pub fn malicious_psu2(
+    left_party: Party,
+    right_party: Party,
+    pp: &'static PublicParams,
+) -> Option<Vec<u8>> {
     let (end_s, end_r) = duplex::<Message>();
 
     let s_handle = thread::spawn(move || {
-        protocol(&right_party, &end_s);
+        protocol(&right_party, &end_s, pp);
     });
 
-    let output = protocol(&left_party, &end_r);
+    let output = protocol(&left_party, &end_r, pp);
     // println!("Finished!");
 
     s_handle.join().unwrap();
@@ -416,22 +412,26 @@ mod twosided {
     use rand::Rng;
     #[test]
     fn malicious_psu2_test() {
-        let n = SET_SIZE; // number of items, each 128-bit length
+        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
+
         let _n = n * 16;
 
         // worst case --> no intersection (percentage 0.0), reveal the entire set of the other party
         // best case  --> no set difference (percentage 1.0), so no batchDDHprove or recover_from_point
         let (input_v, input_w) = generate_input(0.0, n);
         let aes_key = [7u8; 16];
+        setup_params(n);
+        let pp = pub_params();
 
         let start = std::time::Instant::now();
-        let left_party = Party::new(input_v.clone(), &aes_key, n, n);
+        let left_party = Party::new(input_v.clone(), &aes_key, pp, n, n);
         let offline_time = start.elapsed();
 
-        let right_party = Party::new(input_w.clone(), &aes_key, n, n);
+        let right_party = Party::new(input_w.clone(), &aes_key, pp, n, n);
 
         let start = std::time::Instant::now();
-        let recovered_w = malicious_psu2(left_party, right_party);
+        let recovered_w = malicious_psu2(left_party, right_party, pp);
         let duration = start.elapsed();
 
         assert!(

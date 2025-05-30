@@ -7,18 +7,27 @@ use curve25519_dalek::{
 use itertools::izip;
 use rand::prelude::*;
 use rand_chacha::ChaCha12Rng;
+use std::sync::OnceLock;
 
 /// Public parameters for Pederson commitment: generators g,f_1, …, f_n
+#[derive(Debug)]
 pub struct PublicParams {
     pub f: Vec<EdwardsPoint>,
 }
 
-pub fn setup_params(n: usize) -> PublicParams {
-    let mut rng = thread_rng();
+static PP: OnceLock<PublicParams> = OnceLock::new();
+
+pub fn setup_params(n: usize) {
     let f: Vec<EdwardsPoint> = (0..n)
-        .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut rng)))
+        .map(|_| EdwardsPoint::mul_base(&Scalar::random(&mut thread_rng())))
         .collect();
-    PublicParams { f }
+
+    PP.set(PublicParams { f })
+        .expect("PublicParams was already initialised.");
+}
+
+pub fn pub_params() -> &'static PublicParams {
+    PP.get().expect("PublicParams not initialised")
 }
 
 #[derive(Clone)]
@@ -621,6 +630,31 @@ pub fn batched_ddh_verify(
 
     true
 }
+
+/// Return `Ok(u32)` on success, or an `Err(&'static str)` describing
+/// why the input isn’t valid.
+pub fn parse_power_or_letter(s: &str) -> Result<u32, &'static str> {
+    // 1. “2^10” style     → 1 << 10  (= 1024)
+    if let Some(exp) = s.strip_prefix("2^") {
+        let exp: u32 = exp.trim().parse().map_err(|_| "bad exponent")?;
+        return 1u32.checked_shl(exp).ok_or("exponent too large for u32");
+    }
+
+    // 2. One-letter shorthands (“y”, “n”, …) — extend as you like
+    match s.trim().to_ascii_lowercase().as_str() {
+        "y" => return Ok(1),
+        "n" => return Ok(0),
+        _ => { /* fall through to plain integer parse */ }
+    }
+
+    // 3. Ordinary decimal / hex numbers
+    s.trim()
+        .strip_prefix("0x")
+        .map(|hex| u32::from_str_radix(hex, 16))
+        .unwrap_or_else(|| s.trim().parse())
+        .map_err(|_| "not a valid integer")
+}
+
 mod known_content_tests {
     use super::*;
 
@@ -628,9 +662,11 @@ mod known_content_tests {
     fn shuffle_known_content_test() {
         use std::time::Instant;
 
-        let n = 10_000;
+        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
-        let pp = setup_params(n);
+        setup_params(n);
+        let pp = pub_params();
         let mut rng = thread_rng();
         let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
         let mut pi: Vec<usize> = (0..n).collect();
@@ -676,9 +712,12 @@ mod adapted_shuffle_tests {
     #[test]
     fn test_adapted_shuffle() {
         use std::time::Instant;
-        let n = 10_000;
 
-        let pp = setup_params(n);
+        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
+
+        setup_params(n);
+        let pp = pub_params();
         let mut rng = thread_rng();
 
         // Original messages m

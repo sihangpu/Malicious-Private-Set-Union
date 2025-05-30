@@ -1,7 +1,7 @@
-use crate::aok::random_permutation;
+use crate::aok::{parse_power_or_letter, random_permutation};
 use crate::mapping::hash_to_curve;
 use crate::otext::{otext, rand_block_vec};
-use crate::twosided::{generate_input, SET_SIZE};
+use crate::twosided::generate_input;
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::scalar::clamp_integer;
@@ -491,7 +491,9 @@ mod onesided {
     use rand::Rng;
     #[test]
     fn semi_honest_psu1_test() {
-        let n = SET_SIZE; // number of items, each 128-bit length
+        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
+
         let _n = n * 16;
         let (input_s, input_r) = generate_input(0.0, n);
         let m0s: Vec<Block> = input_s
@@ -525,7 +527,9 @@ mod onesided {
 
     #[test]
     fn sender_malicious_psu1_test() {
-        let n = SET_SIZE; // number of items, each 128-bit length
+        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
+
         let _n = n * 16;
         let (input_s, input_r) = generate_input(0.0, n);
         let m0s: Vec<Block> = input_s
