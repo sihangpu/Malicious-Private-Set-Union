@@ -1,3 +1,4 @@
+#[allow(non_snake_case)]
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},

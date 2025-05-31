@@ -491,7 +491,7 @@ mod onesided {
     use rand::Rng;
     #[test]
     fn semi_honest_psu1_test() {
-        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
         let _n = n * 16;
@@ -527,7 +527,7 @@ mod onesided {
 
     #[test]
     fn sender_malicious_psu1_test() {
-        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
         let _n = n * 16;

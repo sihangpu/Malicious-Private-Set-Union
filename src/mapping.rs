@@ -1,13 +1,8 @@
 // Mapping module for efficient field and Montgomery point conversions
 use core::ops::Neg;
 use curve25519_dalek::{
-    constants,
-    edwards::EdwardsPoint,
-    field::FieldElement,
-    montgomery::MontgomeryPoint,
-    scalar::{clamp_integer, Scalar},
-    traits::Identity,
-    traits::VartimeMultiscalarMul,
+    constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
+    scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
 
 use lazy_static::lazy_static;
@@ -57,9 +52,8 @@ pub fn hash_to_point(item: &[u8], permut: &FeistelPrp256) -> EdwardsPoint {
 pub fn recover_from_point(point: &EdwardsPoint, permut: &FeistelPrp256) -> [u8; 16] {
     // Convert Edwards point to Montgomery and then to field
     let mut item = [0u8; 16];
-    let mut p = EdwardsPoint::default();
     for i in 0..8 {
-        p = point + constants::EIGHT_TORSION[i];
+        let p = point + constants::EIGHT_TORSION[i];
         let pair: Option<[FieldElement; 2]> = edwards_to_field(&p);
         if let Some(r) = pair {
             if check_item(&r[0], &r[1], permut, &mut item) {
@@ -331,6 +325,7 @@ pub struct PerformanceStats {
 }
 
 pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
+    use rand::prelude::*;
     use std::time::Instant;
 
     let test_field = FieldElement::from_bytes(&[42u8; 32]);
@@ -340,15 +335,13 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
     // Benchmark field to Montgomery
     let start = Instant::now();
     for _ in 0..iterations {
-        let m = field_to_mont(&test_field);
-        // let e = m.to_edwards(0u8).unwrap();
+        let _ = field_to_mont(&test_field);
     }
     let field_to_mont_time = start.elapsed();
 
     // Benchmark Montgomery to field
     let start = Instant::now();
     for _ in 0..iterations {
-        // let _ = test_point_ed.to_montgomery();
         let _ = mont_to_field(&test_point);
     }
     let mont_to_field_time = start.elapsed();
@@ -439,8 +432,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
 #[cfg(test)]
 mod basic_tests {
     use super::*;
-    // use rand::prelude::*;
-    // use std::{iter, time::Instant};
+    use curve25519_dalek::scalar::clamp_integer;
 
     #[test]
     fn correctness_test() {
@@ -511,7 +503,7 @@ mod basic_tests {
 
     #[test]
     fn comprehensive_performance_benchmark() {
-        let iterations = 10_00;
+        let iterations = 100_00;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");
@@ -561,7 +553,7 @@ mod basic_tests {
             1_000_000_000f64 / stats.aes_round_trip_time
         );
         println!(
-            "Hash to Point Round-Trip: {:.0} ops/sec; each {:.1} us",
+            "Hash to Point and Recover Round-Trip: {:.0} ops/sec; each {:.1} us",
             stats.hashpoint_round_trip_time,
             1_000_000f64 / stats.hashpoint_round_trip_time
         );

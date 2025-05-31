@@ -15,6 +15,7 @@ use curve25519_dalek::{
 use rand::{seq::SliceRandom, Rng, RngCore};
 use std::collections::HashSet;
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 enum Message {
@@ -412,7 +413,7 @@ mod twosided {
     use rand::Rng;
     #[test]
     fn malicious_psu2_test() {
-        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
         let _n = n * 16;
@@ -438,6 +439,7 @@ mod twosided {
             correctness_check(&input_v, &input_w, &recovered_w.unwrap()),
             "Incorrect output!"
         );
+
         println!(
             "Malicious Two-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}",
             n, duration, offline
