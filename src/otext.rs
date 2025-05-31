@@ -48,6 +48,7 @@ pub fn otext<OTSender: Sender<Msg = Block>, OTReceiver: Receiver<Msg = Block>>(
     results
 }
 
+#[cfg(test)]
 mod ot_tests {
     use super::*;
 

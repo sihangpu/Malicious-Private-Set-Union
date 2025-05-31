@@ -656,6 +656,7 @@ pub fn parse_power_or_letter(s: &str) -> Result<u32, &'static str> {
         .map_err(|_| "not a valid integer")
 }
 
+#[cfg(test)]
 mod known_content_tests {
     use super::*;
 
@@ -663,7 +664,7 @@ mod known_content_tests {
     fn shuffle_known_content_test() {
         use std::time::Instant;
 
-        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n_str = std::env::var("N").unwrap_or_else(|_| "10000".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
         setup_params(n);
@@ -700,7 +701,8 @@ mod known_content_tests {
         );
 
         println!(
-            "Known content aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            "Known content aok, N: {:?}, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            n,
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
@@ -714,7 +716,7 @@ mod adapted_shuffle_tests {
     fn test_adapted_shuffle() {
         use std::time::Instant;
 
-        let n_str = std::env::var("N").unwrap_or_else(|_| "1024".into());
+        let n_str = std::env::var("N").unwrap_or_else(|_| "10000".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
         setup_params(n);
@@ -753,7 +755,8 @@ mod adapted_shuffle_tests {
         assert!(result, "Valid proof should verify");
 
         println!(
-            "Adapted shuffle aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            "Adapted shuffle aok, N: {:?}, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            n,
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
@@ -766,7 +769,9 @@ mod batch_ddh_tests {
     #[test]
     fn test_batched_ddh() {
         use std::time::Instant;
-        let n = 10_000;
+        let n_str = std::env::var("N").unwrap_or_else(|_| "10000".into());
+        let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
+
         let mut rng = thread_rng();
 
         // Public key pk and permuted messages m_shuffled
@@ -795,7 +800,8 @@ mod batch_ddh_tests {
         assert!(result, "Valid proof should verify");
 
         println!(
-            "Batched ddh aok, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            "Batched ddh aok, N: {:?}, Proof time: {:.2} us/msg , Verify time: {:.2} us/msg\n",
+            n,
             prooftime.as_secs_f64() / n as f64 * 1_000_000f64,
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );

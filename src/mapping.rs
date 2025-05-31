@@ -1,10 +1,10 @@
 // Mapping module for efficient field and Montgomery point conversions
+use crate::aok::parse_power_or_letter;
 use core::ops::Neg;
 use curve25519_dalek::{
     constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
     scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
-
 use lazy_static::lazy_static;
 use rand::prelude::*;
 use rand::{rngs::OsRng, RngCore};
@@ -502,8 +502,9 @@ mod basic_tests {
     }
 
     #[test]
-    fn comprehensive_performance_benchmark() {
-        let iterations = 100_00;
+    fn blocks_benchmark() {
+        let str = std::env::var("N").unwrap_or_else(|_| "10000".into());
+        let iterations = parse_power_or_letter(&str).expect("bad N") as usize;
         let stats = benchmark_performance(iterations);
 
         println!("\n=== Performance Benchmark Results ===");

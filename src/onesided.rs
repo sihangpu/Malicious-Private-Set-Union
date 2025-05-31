@@ -357,7 +357,7 @@ pub fn semi_honest_psu1(sender: PartySender, receiver: PartyReceiver, ms: Vec<(B
     let indicator = receiver.compare(&blinded, &sd_m2);
 
     let stream = TcpStream::connect(addr).unwrap();
-    let results = otext_recv::<AlszReceiver>(&stream, &indicator);
+    let _results = otext_recv::<AlszReceiver>(&stream, &indicator);
 
     s_handle.join().unwrap();
 }
@@ -478,17 +478,17 @@ pub fn sender_malicious_psu1(
             hasher.update(g.compress().as_bytes());
             hasher.update(hi.as_bytes());
             hasher.update(gr.as_bytes());
-            let hc: [u8; 32] = hasher.finalize_reset().into();
-            // assert!(hc[..16] == c[i].as_array()); // correctness check
+            let _hc: [u8; 32] = hasher.finalize_reset().into();
+            // assert!(_hc[..16] == c[i].as_array()); // correctness check
         }
     }
 
     s_handle.join().unwrap();
 }
 
+#[cfg(test)]
 mod onesided {
     use super::*;
-    use rand::Rng;
     #[test]
     fn semi_honest_psu1_test() {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());

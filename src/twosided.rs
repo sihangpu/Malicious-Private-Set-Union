@@ -408,9 +408,9 @@ pub fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u
     (input_v, input_w)
 }
 
+#[cfg(test)]
 mod twosided {
     use super::*;
-    use rand::Rng;
     #[test]
     fn malicious_psu2_test() {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
