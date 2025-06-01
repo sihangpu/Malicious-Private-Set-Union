@@ -9,6 +9,6 @@ fn main() {
     }
     cc::Build::new()
         .file("cbits/transpose.c")
-        .flag("-msse4.1")
+        // .flag("-msse4.1")
         .compile("libtranspose.a");
 }

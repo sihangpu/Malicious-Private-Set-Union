@@ -8,7 +8,7 @@
 // Authors:
 // - isis agora lovecruft <isis@patternsinthevoid.net>
 // - Henry de Valence <hdevalence@hdevalence.ca>
-
+#![allow(unsafe_code, stable_features)]
 #![no_std]
 #![cfg_attr(
     all(

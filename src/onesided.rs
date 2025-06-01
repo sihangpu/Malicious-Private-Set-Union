@@ -1,23 +1,21 @@
-use crate::aok::{parse_power_or_letter, random_permutation};
+use crate::aok::random_permutation;
 use crate::mapping::hash_to_curve;
-use crate::otext::{otext, rand_block_vec};
-use crate::twosided::generate_input;
+
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::scalar::clamp_integer;
 use curve25519_dalek::traits::VartimeMultiscalarMul;
 use curve25519_dalek::{EdwardsPoint, MontgomeryPoint, Scalar};
-use ocelot::ot::{AlszReceiver, AlszSender, KosReceiver, KosSender, Receiver, Sender};
 
+use ocelot::ot::{AlszReceiver, AlszSender, KosReceiver, KosSender, Receiver, Sender};
 use scuttlebutt::{AesRng, Block, Channel};
 use vectoreyes::SimdBase;
 
-use rand::{rngs::OsRng, RngCore};
-use std::collections::HashSet;
+use rand::RngCore;
 use std::io::{BufReader, BufWriter};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver as MpscReceiver, Sender as MpscSender};
-use std::thread;
+use std::{collections::HashSet, thread};
 
 use lazy_static::lazy_static;
 
@@ -489,6 +487,9 @@ pub fn sender_malicious_psu1(
 #[cfg(test)]
 mod onesided {
     use super::*;
+    use crate::aok::parse_power_or_letter;
+    use crate::twosided::generate_input;
+
     #[test]
     fn semi_honest_psu1_test() {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());

@@ -1,13 +1,13 @@
-#[allow(non_snake_case)]
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
     traits::VartimeMultiscalarMul,
 };
-use itertools::izip;
-use rand::prelude::*;
 use rand_chacha::ChaCha12Rng;
+
+use itertools::izip;
+use rand::{thread_rng, Rng, SeedableRng};
 use std::sync::OnceLock;
 
 /// Public parameters for Pederson commitment: generators g,f_1, …, f_n
@@ -301,19 +301,19 @@ pub fn verify_shuffle_known(
     }
 
     // Recompute F_i recursively and check final equality
-    let mut F = proof.f[0] - e * x;
+    let mut _f = proof.f[0] - e * x;
     let e_inv = e.invert();
     for i in 1..n {
         let exp = proof.f[i] - e * x;
-        let tmp = F * exp + proof.f_delta[i - 1];
-        F = tmp * e_inv;
+        let tmp = _f * exp + proof.f_delta[i - 1];
+        _f = tmp * e_inv;
     }
     let mut prod = Scalar::ONE;
     for mi in m {
         prod *= *mi - x;
     }
 
-    if F != e * prod {
+    if _f != e * prod {
         return false;
     }
 
@@ -520,19 +520,19 @@ pub fn verify_shuffle_adapted(
     let psi_c_a = proof.psi._c_a.decompress().unwrap();
 
     // Recompute F_i recursively and check final equality in Kown Content Proof
-    let mut F = proof.psi.f[0] - psi_e * psi_x;
+    let mut _f = proof.psi.f[0] - psi_e * psi_x;
     let e_inv = psi_e.invert();
     for i in 1..n {
         let exp = proof.psi.f[i] - psi_e * psi_x;
-        let tmp = F * exp + proof.psi.f_delta[i - 1];
-        F = tmp * e_inv;
+        let tmp = _f * exp + proof.psi.f_delta[i - 1];
+        _f = tmp * e_inv;
     }
     let mut prod = Scalar::ONE;
     for mi in &z_rho {
         prod *= *mi - psi_x;
     }
 
-    if F != psi_e * prod {
+    if _f != psi_e * prod {
         return false;
     }
 
@@ -663,8 +663,8 @@ mod known_content_tests {
         let pp = pub_params();
         let mut rng = thread_rng();
         let m: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
-        let mut pi: Vec<usize> = (0..n).collect();
-        pi.shuffle(&mut rng);
+
+        let (pi, _) = random_permutation(n);
 
         // Commitment to shuffled m under randomness r
         let r = Scalar::random(&mut rng);
@@ -701,6 +701,7 @@ mod known_content_tests {
     }
 }
 
+#[cfg(test)]
 mod adapted_shuffle_tests {
     use super::*;
 
@@ -755,6 +756,7 @@ mod adapted_shuffle_tests {
     }
 }
 
+#[cfg(test)]
 mod batch_ddh_tests {
     use super::*;
 

@@ -17,7 +17,7 @@
 //!
 //! When the vector backend is enabled, the field and scalar
 //! implementations are still used for non-vectorized operations.
-
+#![allow(private_interfaces)]
 use cfg_if::cfg_if;
 
 cfg_if! {

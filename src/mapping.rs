@@ -1,17 +1,14 @@
-// Mapping module for efficient field and Montgomery point conversions
-use crate::aok::parse_power_or_letter;
-use core::ops::Neg;
+use aes::Aes128;
+use blake2::{Blake2s256, Digest};
+use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use curve25519_dalek::{
     constants, edwards::EdwardsPoint, field::FieldElement, montgomery::MontgomeryPoint,
     scalar::Scalar, traits::Identity, traits::VartimeMultiscalarMul,
 };
-use lazy_static::lazy_static;
-use rand::prelude::*;
-use rand::{rngs::OsRng, RngCore};
 
-use aes::Aes128;
-use blake2::{Blake2s256, Digest};
-use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
+use core::ops::Neg;
+use lazy_static::lazy_static;
+use rand::{rngs::OsRng, CryptoRng, RngCore};
 use typenum::U16;
 
 // Pre-compute all constants at startup
@@ -432,6 +429,7 @@ pub fn benchmark_performance(iterations: usize) -> PerformanceStats {
 #[cfg(test)]
 mod basic_tests {
     use super::*;
+    use crate::aok::parse_power_or_letter;
     use curve25519_dalek::scalar::clamp_integer;
 
     #[test]

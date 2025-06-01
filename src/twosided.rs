@@ -1,21 +1,19 @@
 use crate::aok::{
-    batched_ddh_prove, batched_ddh_verify, parse_power_or_letter, prove_shuffle_adapted,
-    prove_shuffle_adapted_preprocess, pub_params, random_permutation, setup_params,
-    verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof, BatchedDDHProof, PublicParams,
+    batched_ddh_prove, batched_ddh_verify, prove_shuffle_adapted, prove_shuffle_adapted_preprocess,
+    random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
+    BatchedDDHProof, PublicParams,
 };
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 use crate::onesided::{duplex, Duplex};
 
 use blake2::{Blake2s256, Digest};
-use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{
+    edwards::CompressedEdwardsY,
     edwards::EdwardsPoint,
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
-use std::collections::HashSet;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{collections::HashSet, thread};
 
 #[derive(Clone)]
 enum Message {
@@ -308,7 +306,7 @@ pub fn malicious_psu2(
 }
 
 // Check if the malicious PSU protocol ends with correct outputs
-fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>) -> bool {
+pub fn correctness_check(input_v: &Vec<u8>, input_w: &Vec<u8>, recovered_w: &Vec<u8>) -> bool {
     const BLOCK_LEN: usize = 16;
     assert!(
         input_v.len() % BLOCK_LEN == 0,
@@ -411,6 +409,8 @@ pub fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u
 #[cfg(test)]
 mod twosided {
     use super::*;
+    use crate::aok::{parse_power_or_letter, pub_params, setup_params};
+
     #[test]
     fn malicious_psu2_test() {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());

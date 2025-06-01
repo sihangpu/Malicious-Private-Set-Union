@@ -1,4 +1,4 @@
-use ocelot::ot::{KosReceiver, KosSender, Receiver, Sender};
+use ocelot::ot::{Receiver, Sender};
 use scuttlebutt::{AesRng, Block, Channel};
 use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
@@ -51,24 +51,24 @@ pub fn otext<OTSender: Sender<Msg = Block>, OTReceiver: Receiver<Msg = Block>>(
 #[cfg(test)]
 mod ot_tests {
     use super::*;
-
+    use ocelot::ot::{KosReceiver, KosSender};
     #[test]
     fn test_kos() {
-        let T = 1 << 20; // number of OTs to run
-        let m0s = rand_block_vec(T);
-        let m1s = rand_block_vec(T);
+        let n = 1 << 20; // number of OTs to run
+        let m0s = rand_block_vec(n);
+        let m1s = rand_block_vec(n);
         let ms = m0s
             .into_iter()
             .zip(m1s.into_iter())
             .collect::<Vec<(Block, Block)>>();
-        let bs = rand_bool_vec(T);
+        let bs = rand_bool_vec(n);
         let start = std::time::Instant::now();
         otext::<KosSender, KosReceiver>(&bs, ms.clone());
         let elapsed = start.elapsed();
         println!(
-            "Kos OTs: {:.2} ms, {:.2} ns/OT",
+            "2^20 Kos OTs: {:.2} ms, {:.2} ns/OT",
             elapsed.as_millis(),
-            elapsed.as_nanos() / T as u128
+            elapsed.as_nanos() / n as u128
         );
     }
 }

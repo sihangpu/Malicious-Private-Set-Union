@@ -1,3 +1,4 @@
+#![allow(unused_imports, dead_code, unused_variables)]
 use criterion::{criterion_group, criterion_main, Criterion};
 use m2psu::onesided::{semi_honest_psu1, sender_malicious_psu1};
 use m2psu::twosided::{generate_input, malicious_psu2};
