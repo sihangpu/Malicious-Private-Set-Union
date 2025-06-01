@@ -485,7 +485,7 @@ pub fn sender_malicious_psu1(
 }
 
 #[cfg(test)]
-mod onesided {
+mod test {
     use super::*;
     use crate::aok::parse_power_or_letter;
     use crate::twosided::generate_input;

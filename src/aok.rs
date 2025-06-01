@@ -650,7 +650,7 @@ pub fn batched_ddh_verify(
 }
 
 #[cfg(test)]
-mod known_content_tests {
+mod test {
     use super::*;
 
     fn _shuffle_known_content_test() {
@@ -699,11 +699,6 @@ mod known_content_tests {
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
     }
-}
-
-#[cfg(test)]
-mod adapted_shuffle_tests {
-    use super::*;
 
     #[test]
     fn test_adapted_shuffle() {
@@ -754,11 +749,6 @@ mod adapted_shuffle_tests {
             verifytime.as_secs_f64() / n as f64 * 1_000_000f64
         );
     }
-}
-
-#[cfg(test)]
-mod batch_ddh_tests {
-    use super::*;
 
     #[test]
     fn test_batched_ddh() {

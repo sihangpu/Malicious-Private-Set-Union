@@ -407,7 +407,7 @@ pub fn generate_input(intersection_percentage: f32, n: usize) -> (Vec<u8>, Vec<u
 }
 
 #[cfg(test)]
-mod twosided {
+mod test {
     use super::*;
     use crate::aok::{parse_power_or_letter, pub_params, setup_params};
 
