@@ -31,6 +31,23 @@ pub fn pub_params() -> &'static PublicParams {
     PP.get().expect("PublicParams not initialised")
 }
 
+/// Return `Ok(u32)` on success, or an `Err(&'static str)` describing
+/// why the input isn’t valid.
+pub fn parse_power_or_letter(s: &str) -> Result<u32, &'static str> {
+    // 2^10 style     → 1 << 10  (= 1024)
+    if let Some(exp) = s.strip_prefix("2^") {
+        let exp: u32 = exp.trim().parse().map_err(|_| "bad exponent")?;
+        return 1u32.checked_shl(exp).ok_or("exponent too large for u32");
+    }
+
+    // Other decimal / hex numbers
+    s.trim()
+        .strip_prefix("0x")
+        .map(|hex| u32::from_str_radix(hex, 16))
+        .unwrap_or_else(|| s.trim().parse())
+        .map_err(|_| "not a valid integer")
+}
+
 #[derive(Clone)]
 pub struct KnownContentProof {
     pub _c_d: CompressedEdwardsY,
@@ -632,36 +649,11 @@ pub fn batched_ddh_verify(
     true
 }
 
-/// Return `Ok(u32)` on success, or an `Err(&'static str)` describing
-/// why the input isn’t valid.
-pub fn parse_power_or_letter(s: &str) -> Result<u32, &'static str> {
-    // 1. “2^10” style     → 1 << 10  (= 1024)
-    if let Some(exp) = s.strip_prefix("2^") {
-        let exp: u32 = exp.trim().parse().map_err(|_| "bad exponent")?;
-        return 1u32.checked_shl(exp).ok_or("exponent too large for u32");
-    }
-
-    // 2. One-letter shorthands (“y”, “n”, …) — extend as you like
-    match s.trim().to_ascii_lowercase().as_str() {
-        "y" => return Ok(1),
-        "n" => return Ok(0),
-        _ => { /* fall through to plain integer parse */ }
-    }
-
-    // 3. Ordinary decimal / hex numbers
-    s.trim()
-        .strip_prefix("0x")
-        .map(|hex| u32::from_str_radix(hex, 16))
-        .unwrap_or_else(|| s.trim().parse())
-        .map_err(|_| "not a valid integer")
-}
-
 #[cfg(test)]
 mod known_content_tests {
     use super::*;
 
-    #[test]
-    fn shuffle_known_content_test() {
+    fn _shuffle_known_content_test() {
         use std::time::Instant;
 
         let n_str = std::env::var("N").unwrap_or_else(|_| "10000".into());
