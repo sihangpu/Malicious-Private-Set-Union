@@ -3,6 +3,11 @@ name = "m2psu"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "m2psu"
+path = "src/lib.rs"
+doctest = false
+
 [dependencies]
 curve25519-dalek = { path = "./curve25519-dalek",  features = ["precomputed-tables", "rand_core", "serde","zeroize"] }
 ocelot = {path = "./swanky-dev/ocelot" }
