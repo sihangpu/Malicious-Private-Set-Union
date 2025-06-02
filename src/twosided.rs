@@ -3,7 +3,7 @@ use crate::aok::{
     random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
     BatchedDDHProof, PublicParams,
 };
-use crate::channel::{recv_framed, send_framed, Message};
+use crate::channel::{spawn_writer, FramedRead, FramedWrite, Message};
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 
 use blake2::{Blake2s256, Digest};
@@ -13,9 +13,17 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
-use std::io::{BufReader, BufWriter};
-use std::net::{TcpListener, TcpStream};
-use std::{collections::HashSet, thread};
+use socket2::SockRef; // <- new
+                      // use std::io::{BufReader, BufWriter};
+                      // use std::net::{TcpListener, TcpStream};
+use anyhow::{Ok, Result};
+use std::collections::HashSet;
+use tokio::io::BufReader;
+use tokio::net::{
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+    TcpListener, TcpStream,
+};
+use tokio::sync::mpsc::unbounded_channel;
 
 // Our highly efficient and fully malicious PSU with two-sided output
 // Symmetric protocol
@@ -209,106 +217,134 @@ impl Party {
     }
 }
 
-fn protocol(party: &Party, stream: &TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = BufWriter::new(stream);
+async fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Result<Vec<u8>> {
+    stream.set_nodelay(true)?; // eliminate Nagle delay
+    let sock = SockRef::from(&stream);
+    sock.set_send_buffer_size(1 << 20)?;
+    sock.set_recv_buffer_size(1 << 20)?;
+
+    let (rd, wr) = stream.into_split();
+    let mut fr = FramedRead(BufReader::new(rd));
+    let (to_net_tx, to_net_rx) = unbounded_channel::<Message>();
+    tokio::spawn(spawn_writer(FramedWrite(wr), to_net_rx));
     let (sigma, points, _points) = party.gen();
+
     // Round 1
-    send_framed(&mut writer, &Message::Round1(sigma));
-    println!("sent R1");
-    if let Message::Round1(right_sigma) = recv_framed(&mut reader).unwrap() {
-        println!("recv R1");
-        //  Round 2
-        send_framed(&mut writer, &Message::Round2((party.pk, _points.clone())));
-        println!("sent R2");
-        if let Message::Round2((right_pk, _right_points)) = recv_framed(&mut reader).unwrap() {
-            println!("recv R2");
-            let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
-            if !valid {
-                println!("First round commitment verification failed!");
-                return None;
-            }
-            let (proof1, right_shuffled, _right_shuffled) =
-                party.blind_shuffle(&pp, &right_points, &_right_points);
+    let start = std::time::Instant::now();
+    to_net_tx.send(Message::Round1(sigma))?;
+    let right_sigma = match fr.read_msg().await? {
+        Message::Round1(s) => s, // expected variant
+        _other => anyhow::bail!("expected Round1"),
+    };
+    let duration = start.elapsed();
+    println!("R1 R/W time {:?}", duration);
 
-            // Round 3
-            send_framed(
-                &mut writer,
-                &Message::Round3((proof1, _right_shuffled.clone())),
-            );
-            println!("sent R3");
-            if let Message::Round3((right_proof1, _shuffled)) = recv_framed(&mut reader).unwrap() {
-                println!("recv R3");
-                let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
+    //  Round 2
+    let start = std::time::Instant::now();
+    to_net_tx.send(Message::Round2((party.pk, _points.clone())))?;
+    let (right_pk, _right_points) = match fr.read_msg().await? {
+        Message::Round2((a, b)) => (a, b),
+        _other => anyhow::bail!("expected Round2"),
+    };
+    let duration = start.elapsed();
+    println!("R2 R/W time {:?}", duration);
 
-                if let Some((_unblinded, ind, proof2)) = party.final_response(
-                    &pp,
-                    &right_pk,
-                    &points,
-                    &shuffled,
-                    &_points,
-                    &_shuffled,
-                    &_right_points,
-                    &right_proof1,
-                ) {
-                    // Round 4
-                    send_framed(&mut writer, &Message::Round4((proof2, _unblinded, ind)));
-                    println!("sent R4");
-                    if let Message::Round4((right_proof2, _right_unblinded, right_ind)) =
-                        recv_framed(&mut reader).unwrap()
-                    {
-                        println!("recv R4");
-                        let right_size = right_ind.len();
-                        let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
-                        let mut shrinked: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
-                        let mut right_unblinded: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
-                        for i in 0..right_size {
-                            let j = right_ind[i] as usize;
-                            right_unblinded.push(_right_unblinded[i].decompress().unwrap());
-                            shrinked.push(right_shuffled[j]);
-                            _shrinked.push(_right_shuffled[j]);
-                        }
-                        let output = party.reveal_items(
-                            &right_pk,
-                            &right_unblinded,
-                            &_right_unblinded,
-                            &shrinked,
-                            &_shrinked,
-                            &right_proof2,
-                        );
-                        return output;
-                    }
-                } else {
-                    print!("Adapted shuffle verification failed!");
-                    return None;
-                }
-            }
-        }
+    let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
+    if !valid {
+        return Err(anyhow::anyhow!(
+            "First round commitment verification failed"
+        ));
     }
-    None
+    let (proof1, right_shuffled, _right_shuffled) =
+        party.blind_shuffle(&pp, &right_points, &_right_points);
+
+    // Round 3
+    let start = std::time::Instant::now();
+    to_net_tx.send(Message::Round3((proof1, _right_shuffled.clone())))?;
+    let (right_proof1, _shuffled) = match fr.read_msg().await? {
+        Message::Round3((a, b)) => (a, b),
+        _other => anyhow::bail!("expected Round3"),
+    };
+    let duration = start.elapsed();
+    println!("R3 R/W time {:?}", duration);
+
+    let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
+    let (_unblinded, ind, proof2) = match party.final_response(
+        &pp,
+        &right_pk,
+        &points,
+        &shuffled,
+        &_points,
+        &_shuffled,
+        &_right_points,
+        &right_proof1,
+    ) {
+        Some(a) => a,
+        _other => anyhow::bail!("Shuffle proof failed"),
+    };
+
+    // Round 4
+    let start = std::time::Instant::now();
+    to_net_tx.send(Message::Round4((proof2, _unblinded, ind)))?;
+    let (right_proof2, _right_unblinded, right_ind) = match fr.read_msg().await? {
+        Message::Round4((a, b, c)) => (a, b, c),
+        _other => anyhow::bail!("expected Round4"),
+    };
+    let duration = start.elapsed();
+    println!("R4 R/W time {:?}", duration);
+
+    let right_size = right_ind.len();
+    let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
+    let mut shrinked: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
+    let mut right_unblinded: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
+    for i in 0..right_size {
+        let j = right_ind[i] as usize;
+        right_unblinded.push(_right_unblinded[i].decompress().unwrap());
+        shrinked.push(right_shuffled[j]);
+        _shrinked.push(_right_shuffled[j]);
+    }
+    let output = party
+        .reveal_items(
+            &right_pk,
+            &right_unblinded,
+            &_right_unblinded,
+            &shrinked,
+            &_shrinked,
+            &right_proof2,
+        )
+        .unwrap();
+
+    Ok(output)
 }
 
-pub fn malicious_psu2(
+pub async fn malicious_psu2(
     left_party: Party,
     right_party: Party,
     pp: &'static PublicParams,
-) -> Option<Vec<u8>> {
-    // let (end_s, end_r) = duplex::<Message>();
-
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+) -> Result<Vec<u8>> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr().unwrap();
 
-    let s_handle = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        protocol(&right_party, &stream, pp);
+    let s_handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+
+        let start = std::time::Instant::now();
+        let _out = protocol(&right_party, stream, pp).await?;
+        let dur = start.elapsed();
+        println!("server time: {:?}", dur);
+
+        Ok(())
     });
-    let stream = TcpStream::connect(addr).unwrap();
 
-    let output = protocol(&left_party, &stream, pp);
-    // println!("Finished!");
+    let stream = TcpStream::connect(addr).await?;
+    let start = std::time::Instant::now();
+    let output = protocol(&left_party, stream, pp).await?;
+    let dur = start.elapsed();
+    println!("client time: {:?}", dur);
 
-    s_handle.join().unwrap();
-    return output;
+    s_handle.await??;
+
+    Ok(output)
 }
 
 // Check if the malicious PSU protocol ends with correct outputs
@@ -417,8 +453,8 @@ mod test {
     use super::*;
     use crate::aok::{parse_power_or_letter, pub_params, setup_params};
 
-    #[test]
-    fn malicious_psu2_test() {
+    #[tokio::test]
+    async fn malicious_psu2_test() -> Result<()> {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
@@ -438,11 +474,11 @@ mod test {
         let right_party = Party::new(input_w.clone(), &aes_key, pp, n, n);
 
         let start = std::time::Instant::now();
-        let recovered_w = malicious_psu2(left_party, right_party, pp);
+        let recovered_w = malicious_psu2(left_party, right_party, pp).await?;
         let duration = start.elapsed();
 
         assert!(
-            correctness_check(&input_v, &input_w, &recovered_w.unwrap()),
+            correctness_check(&input_v, &input_w, &recovered_w),
             "Incorrect output!"
         );
 
@@ -450,5 +486,7 @@ mod test {
             "Malicious Two-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}",
             n, duration, offline
         );
+
+        Ok(())
     }
 }

@@ -1,5 +1,5 @@
 use crate::aok::random_permutation;
-use crate::channel::{recv_framed, send_framed, Message};
+use crate::channel::{spawn_writer, FramedRead, FramedWrite, Message};
 use crate::mapping::hash_to_curve;
 
 use blake2::{Blake2s256, Digest};

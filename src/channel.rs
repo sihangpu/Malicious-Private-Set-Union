@@ -1,9 +1,13 @@
 use crate::aok::{AdaptedShuffleProof, BatchedDDHProof};
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use curve25519_dalek::{edwards::CompressedEdwardsY, edwards::EdwardsPoint, MontgomeryPoint};
 use serde::{Deserialize, Serialize};
-use std::io::{BufReader, BufWriter, Read, Write};
+
+use anyhow::Result;
+use bytes::{Bytes, BytesMut};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::sync::mpsc::UnboundedReceiver as Rx;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Message {
@@ -15,26 +19,64 @@ pub enum Message {
     HashDH2(Vec<CompressedEdwardsY>), // for sender-malicious one
 }
 
-pub fn send_framed<W: Write>(stream: &mut BufWriter<W>, msg: &Message) -> std::io::Result<()> {
-    // Serialize via bincode (for compactness)
-    let payload = bincode::serialize(msg).unwrap();
-    let length = payload.len() as u32;
+// pub enum Outgoing {
+//     Plain(Bytes),
+// }
 
-    // Write length prefix (4 bytes, little endian)
-    stream.write_u32::<LittleEndian>(length)?;
-    // Write payload
-    stream.write_all(&payload)?;
-    stream.flush()?;
-    Ok(())
+// /// Net→app messages.
+
+// pub enum Incoming {
+//     Plain(Bytes),
+// }
+
+pub struct FramedRead<R>(pub BufReader<R>);
+pub struct FramedWrite<W>(pub W);
+
+impl<R: AsyncReadExt + Unpin> FramedRead<R> {
+    pub async fn read_msg(&mut self) -> Result<Message> {
+        let len = self.0.read_u32_le().await? as usize;
+        let mut buf = BytesMut::with_capacity(len);
+        buf.resize(len, 0);
+        self.0.read_exact(&mut buf).await?;
+        let bytes: Vec<u8> = buf.freeze().try_into()?;
+        let msg: Message = bincode::deserialize(&bytes).unwrap();
+
+        Ok(msg)
+    }
+}
+impl<W: AsyncWriteExt + Unpin> FramedWrite<W> {
+    pub async fn write_msg(&mut self, msg: &Message) -> Result<()> {
+        let payload = bincode::serialize(msg).unwrap();
+        let bytes = Bytes::from(payload);
+        self.0.write_u32_le(bytes.len() as u32).await?;
+        self.0.write_all(&bytes).await?;
+        self.0.flush().await?;
+
+        Ok(())
+    }
 }
 
-pub fn recv_framed<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Message> {
-    // Read the 4-byte length prefix
-    let length = stream.read_u32::<LittleEndian>()?;
-    let mut buf = vec![0u8; length as usize];
-    let _ = stream.read_exact(&mut buf);
-
-    // Deserialize via bincode
-    let msg: Message = bincode::deserialize(&buf).unwrap();
-    Ok(msg)
+/// Spawn one writer task that owns the write-half
+pub async fn spawn_writer(mut fw: FramedWrite<OwnedWriteHalf>, mut tx_rx: Rx<Message>) {
+    while let Some(msg) = tx_rx.recv().await {
+        if let Err(e) = fw.write_msg(&msg).await {
+            eprintln!("write error: {e}");
+            break;
+        }
+    }
 }
+
+// /// Spawn one reader task that owns the read-half
+// pub async fn spawn_reader(mut fr: FramedRead<tokio::net::tcp::ReadHalf<'_>>, rx_tx: Tx<Message>) {
+//     loop {
+//         match fr.read_msg().await {
+//             Ok(msg) => {
+//                 let _ = rx_tx.send(msg); // deliver to app
+//             }
+//             Err(e) => {
+//                 eprintln!("read error: {e}");
+//                 break;
+//             }
+//         }
+//     }
+// }
