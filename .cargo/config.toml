@@ -1,7 +1,7 @@
 [target.aarch64-apple-darwin]
 rustflags = ['--cfg=curve25519_dalek_backend="u64"',
              "-C", "target-cpu=apple-m1",    
-             "-C", "target-feature=+sse4.1,+ssse3,+neon,+aes,+sha2,+crc,+fp16,+rcpc",
+             "-C", "target-feature=+neon,+aes,+sha2,+crc,+fp16,+rcpc",
              "-Z", "tune-cpu=apple-m1",
              "--cfg=aes_armv8",
              ]
@@ -24,4 +24,6 @@ rustflags = ['--cfg=curve25519_dalek_backend="u64"',
 [alias]
 test-release = "test --release -- --nocapture"
 tr = "test --release -- --nocapture"
-      
+tr-sh = "test --release -- --nocapture semi_honest_psu1"
+tr-1m = "test --release -- --nocapture sender_malicious_psu1"
+tr-2m = "test --release -- --nocapture malicious_psu2"

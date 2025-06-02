@@ -3,69 +3,19 @@ use crate::aok::{
     random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
     BatchedDDHProof, PublicParams,
 };
+use crate::channel::{receive_framed_message, send_framed_message, Message};
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
-use crate::onesided::{duplex, Duplex};
 
 use blake2::{Blake2s256, Digest};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use curve25519_dalek::{
     edwards::CompressedEdwardsY,
     edwards::EdwardsPoint,
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
-use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::{collections::HashSet, thread};
 
-#[derive(Serialize, Deserialize, Clone)]
-enum Message {
-    Round1([u8; 32]),
-    Round2((EdwardsPoint, Vec<CompressedEdwardsY>)),
-    Round3((AdaptedShuffleProof, Vec<CompressedEdwardsY>)),
-    Round4((BatchedDDHProof, Vec<CompressedEdwardsY>, Vec<u32>)),
-}
-
-fn serialize_message_bincode(msg: &Message) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let bytes = bincode::serialize(msg)?;
-    Ok(bytes)
-}
-
-fn deserialize_message_bincode(bytes: &[u8]) -> Result<Message, Box<dyn std::error::Error>> {
-    let msg: Message = bincode::deserialize(bytes)?;
-    Ok(msg)
-}
-
-fn send_framed_message(
-    stream: &mut TcpStream,
-    msg: &Message,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Serialize via bincode (for compactness)
-    let payload = bincode::serialize(msg)?;
-    let length = payload.len() as u32;
-
-    // Write length prefix (4 bytes, little endian)
-    stream.write_u32::<LittleEndian>(length)?;
-    // Write payload
-    stream.write_all(&payload)?;
-    Ok(())
-}
-
-fn receive_framed_message(
-    stream: &mut TcpStream,
-) -> Result<Option<Message>, Box<dyn std::error::Error>> {
-    // Read the 4-byte length prefix
-    let length = stream.read_u32::<LittleEndian>().unwrap() as usize;
-
-    let mut buf = vec![0u8; length];
-    stream.read_exact(&mut buf)?;
-
-    // Deserialize via bincode
-    let msg: Message = bincode::deserialize(&buf)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(Some(msg))
-}
 // Our highly efficient and fully malicious PSU with two-sided output
 // Symmetric protocol
 pub struct Party {
@@ -258,16 +208,15 @@ impl Party {
     }
 }
 
-fn protocol(party: &Party, end: &Duplex<Message>, pp: &PublicParams) -> Option<Vec<u8>> {
+fn protocol(party: &Party, stream: &mut TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
     let (sigma, points, _points) = party.gen();
     // Round 1
-    end.tx.send(Message::Round1(sigma)).unwrap();
-    if let Message::Round1(right_sigma) = end.rx.recv().unwrap() {
+    send_framed_message(stream, &Message::Round1(sigma));
+    if let Message::Round1(right_sigma) = receive_framed_message(stream).unwrap() {
         //  Round 2
-        end.tx
-            .send(Message::Round2((party.pk, _points.clone())))
-            .unwrap();
-        if let Message::Round2((right_pk, _right_points)) = end.rx.recv().unwrap() {
+        send_framed_message(stream, &Message::Round2((party.pk, _points.clone())));
+        if let Message::Round2((right_pk, _right_points)) = receive_framed_message(stream).unwrap()
+        {
             let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
             if !valid {
                 println!("First round commitment verification failed!");
@@ -277,10 +226,10 @@ fn protocol(party: &Party, end: &Duplex<Message>, pp: &PublicParams) -> Option<V
                 party.blind_shuffle(&pp, &right_points, &_right_points);
 
             // Round 3
-            end.tx
-                .send(Message::Round3((proof1, _right_shuffled.clone())))
-                .unwrap();
-            if let Message::Round3((right_proof1, _shuffled)) = end.rx.recv().unwrap() {
+            send_framed_message(stream, &Message::Round3((proof1, _right_shuffled.clone())));
+            if let Message::Round3((right_proof1, _shuffled)) =
+                receive_framed_message(stream).unwrap()
+            {
                 let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
 
                 if let Some((_unblinded, ind, proof2)) = party.final_response(
@@ -294,11 +243,9 @@ fn protocol(party: &Party, end: &Duplex<Message>, pp: &PublicParams) -> Option<V
                     &right_proof1,
                 ) {
                     // Round 4
-                    end.tx
-                        .send(Message::Round4((proof2, _unblinded, ind)))
-                        .unwrap();
+                    send_framed_message(stream, &Message::Round4((proof2, _unblinded, ind)));
                     if let Message::Round4((right_proof2, _right_unblinded, right_ind)) =
-                        end.rx.recv().unwrap()
+                        receive_framed_message(stream).unwrap()
                     {
                         let right_size = right_ind.len();
                         let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
@@ -335,13 +282,18 @@ pub fn malicious_psu2(
     right_party: Party,
     pp: &'static PublicParams,
 ) -> Option<Vec<u8>> {
-    let (end_s, end_r) = duplex::<Message>();
+    // let (end_s, end_r) = duplex::<Message>();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
 
     let s_handle = thread::spawn(move || {
-        protocol(&right_party, &end_s, pp);
+        let (mut stream, _) = listener.accept().unwrap();
+        protocol(&right_party, &mut stream, pp);
     });
+    let mut stream = TcpStream::connect(addr).unwrap();
 
-    let output = protocol(&left_party, &end_r, pp);
+    let output = protocol(&left_party, &mut stream, pp);
     // println!("Finished!");
 
     s_handle.join().unwrap();

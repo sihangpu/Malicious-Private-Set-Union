@@ -1,40 +1,25 @@
 use crate::aok::random_permutation;
+use crate::channel::{receive_framed_message, send_framed_message, Message};
 use crate::mapping::hash_to_curve;
 
 use blake2::{Blake2s256, Digest};
-use curve25519_dalek::edwards::CompressedEdwardsY;
-use curve25519_dalek::scalar::clamp_integer;
-use curve25519_dalek::traits::VartimeMultiscalarMul;
-use curve25519_dalek::{EdwardsPoint, MontgomeryPoint, Scalar};
-
+use curve25519_dalek::{
+    edwards::CompressedEdwardsY, scalar::clamp_integer, traits::VartimeMultiscalarMul,
+    EdwardsPoint, MontgomeryPoint, Scalar,
+};
 use ocelot::ot::{AlszReceiver, AlszSender, KosReceiver, KosSender, Receiver, Sender};
 use scuttlebutt::{AesRng, Block, Channel};
 use vectoreyes::SimdBase;
 
+use lazy_static::lazy_static;
 use rand::RngCore;
 use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{channel, Receiver as MpscReceiver, Sender as MpscSender};
 use std::{collections::HashSet, thread};
-
-use lazy_static::lazy_static;
 
 lazy_static! {
     static ref SC_8: Scalar = Scalar::from(8u64);
     static ref SC_INV_8: Scalar = Scalar::from(8u64).invert();
-}
-pub struct Duplex<T> {
-    pub tx: MpscSender<T>,
-    pub rx: MpscReceiver<T>,
-}
-/// Creates a pair of opposite endpoints:
-/// - `a.tx` → feeds into `b.rx`
-/// - `b.tx` → feeds into `a.rx`
-#[inline]
-pub fn duplex<T>() -> (Duplex<T>, Duplex<T>) {
-    let (tx1, rx1) = channel();
-    let (tx2, rx2) = channel();
-    (Duplex { tx: tx1, rx: rx2 }, Duplex { tx: tx2, rx: rx1 })
 }
 
 // State-of-the-art semi-honest PSU from shuffle OPRF by using only Montgomery points on Curve25519
@@ -327,36 +312,39 @@ fn otext_recv_quadra<OTReceiver: Receiver<Msg = Block>>(
 }
 
 pub fn semi_honest_psu1(sender: PartySender, receiver: PartyReceiver, ms: Vec<(Block, Block)>) {
-    let (end_s, end_r) = duplex();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
     let s_handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+
         let (sd_m1, _) = sender.gen();
+        send_framed_message(&mut stream, &Message::HashDH(sd_m1));
 
-        end_s.tx.send(sd_m1).unwrap();
+        if let Message::HashDH(rc_m1) = receive_framed_message(&mut stream).unwrap() {
+            let sd_m2 = sender.blind_and_shuffle(&rc_m1);
 
-        let rc_m1 = end_s.rx.recv().unwrap();
-
-        let sd_m2 = sender.blind_and_shuffle(&rc_m1);
-
-        end_s.tx.send(sd_m2).unwrap();
-        let (stream, _) = listener.accept().unwrap();
-        otext_send::<AlszSender>(&stream, ms);
+            send_framed_message(&mut stream, &Message::HashDH(sd_m2));
+            otext_send::<AlszSender>(&stream, ms);
+        }
     });
+    let mut stream = TcpStream::connect(addr).unwrap();
 
     let rc_m1 = receiver.gen();
-    end_r.tx.send(rc_m1).unwrap();
+    // end_r.tx.send(rc_m1).unwrap();
+    send_framed_message(&mut stream, &Message::HashDH(rc_m1));
 
-    let sd_m1 = end_r.rx.recv().unwrap();
-    let blinded = receiver.blind(&sd_m1);
+    if let Message::HashDH(sd_m1) = receive_framed_message(&mut stream).unwrap() {
+        // end_r.rx.recv().unwrap();
+        let blinded = receiver.blind(&sd_m1);
 
-    let sd_m2 = end_r.rx.recv().unwrap();
-    let indicator = receiver.compare(&blinded, &sd_m2);
+        if let Message::HashDH(sd_m2) = receive_framed_message(&mut stream).unwrap() {
+            // end_r.rx.recv().unwrap();
+            let indicator = receiver.compare(&blinded, &sd_m2);
 
-    let stream = TcpStream::connect(addr).unwrap();
-    let _results = otext_recv::<AlszReceiver>(&stream, &indicator);
-
+            let _results = otext_recv::<AlszReceiver>(&stream, &indicator);
+        }
+    }
     s_handle.join().unwrap();
 }
 
@@ -382,102 +370,105 @@ pub fn sender_malicious_psu1(
     receiver: PartyReceiver1M,
     ms: Vec<(Block, Block)>,
 ) {
-    let (end_s, end_r) = duplex();
-
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
     let n = sender.n;
 
     let s_handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
         let (_points, original, _original) = sender.gen();
 
-        end_s.tx.send(_points.clone()).unwrap();
+        send_framed_message(&mut stream, &Message::HashDH2(_points.clone()));
+        if let Message::HashDH2(rc_m1) = receive_framed_message(&mut stream).unwrap() {
+            let sd_m2 = sender.blind_and_shuffle(&rc_m1);
+            send_framed_message(&mut stream, &Message::HashDH2(sd_m2));
 
-        let rc_m1 = end_s.rx.recv().unwrap();
+            let mut c: Vec<Block> = Vec::with_capacity(sender.n);
+            let mut z0: Vec<Block> = Vec::with_capacity(sender.n);
+            let mut z1: Vec<Block> = Vec::with_capacity(sender.n);
+            let mut hasher = Blake2s256::new();
+            let mut raw = [0u8; 32];
+            for i in 0..sender.n {
+                rand::thread_rng().fill_bytes(&mut raw);
+                let r_8 = clamp_integer(raw);
+                let r = Scalar::from_bytes_mod_order(r_8) * *SC_INV_8;
 
-        let sd_m2 = sender.blind_and_shuffle(&rc_m1);
+                hasher.update(_original[i].as_bytes()); // H(x)
+                hasher.update(_points[i].as_bytes()); // y=H(x)^k
+                hasher.update(original[i].mul_clamped(r_8).compress().as_bytes()); //H(x)^r
 
-        end_s.tx.send(sd_m2).unwrap();
-        let (stream, _) = listener.accept().unwrap();
+                let mut hc: [u8; 32] = hasher.finalize_reset().into();
+                clear_high_bits(&mut hc);
+                let z = r - Scalar::from_bytes_mod_order(hc) * sender.sk; //z = r - k * c
 
-        let mut c: Vec<Block> = Vec::with_capacity(sender.n);
-        let mut z0: Vec<Block> = Vec::with_capacity(sender.n);
-        let mut z1: Vec<Block> = Vec::with_capacity(sender.n);
-        let mut hasher = Blake2s256::new();
-        let mut raw = [0u8; 32];
-        for i in 0..sender.n {
-            rand::thread_rng().fill_bytes(&mut raw);
-            let r_8 = clamp_integer(raw);
-            let r = Scalar::from_bytes_mod_order(r_8) * *SC_INV_8;
+                c.push(Block::from_array(hc[..16].try_into().unwrap()));
+                z0.push(Block::from_array(z.as_bytes()[0..16].try_into().unwrap()));
+                z1.push(Block::from_array(z.as_bytes()[16..32].try_into().unwrap()));
+            }
 
-            hasher.update(_original[i].as_bytes()); // H(x)
-            hasher.update(_points[i].as_bytes()); // y=H(x)^k
-            hasher.update(original[i].mul_clamped(r_8).compress().as_bytes()); //H(x)^r
+            let mperp: Vec<Block> = (0..sender.n)
+                .map(|_| Block::from_array([0u8; 16]))
+                .collect();
+            let chunk = (
+                ms,
+                c.into_iter()
+                    .zip(mperp.clone().into_iter())
+                    .collect::<Vec<(Block, Block)>>(),
+                z0.into_iter()
+                    .zip(mperp.clone().into_iter())
+                    .collect::<Vec<(Block, Block)>>(),
+                z1.into_iter()
+                    .zip(mperp.into_iter())
+                    .collect::<Vec<(Block, Block)>>(),
+            );
 
-            let mut hc: [u8; 32] = hasher.finalize_reset().into();
-            clear_high_bits(&mut hc);
-            let z = r - Scalar::from_bytes_mod_order(hc) * sender.sk; //z = r - k * c
-
-            c.push(Block::from_array(hc[..16].try_into().unwrap()));
-            z0.push(Block::from_array(z.as_bytes()[0..16].try_into().unwrap()));
-            z1.push(Block::from_array(z.as_bytes()[16..32].try_into().unwrap()));
+            otext_send_quadra::<KosSender>(&stream, chunk);
         }
-
-        let mperp: Vec<Block> = (0..sender.n)
-            .map(|_| Block::from_array([0u8; 16]))
-            .collect();
-        let chunk = (
-            ms,
-            c.into_iter()
-                .zip(mperp.clone().into_iter())
-                .collect::<Vec<(Block, Block)>>(),
-            z0.into_iter()
-                .zip(mperp.clone().into_iter())
-                .collect::<Vec<(Block, Block)>>(),
-            z1.into_iter()
-                .zip(mperp.into_iter())
-                .collect::<Vec<(Block, Block)>>(),
-        );
-
-        otext_send_quadra::<KosSender>(&stream, chunk);
     });
 
+    let mut stream = TcpStream::connect(addr).unwrap();
     let rc_m1 = receiver.gen();
-    end_r.tx.send(rc_m1).unwrap();
 
-    let _sender_points = end_r.rx.recv().unwrap();
-    let (_blinded, sender_points) = receiver.blind(&_sender_points);
+    // end_r.tx.send(rc_m1).unwrap();
+    send_framed_message(&mut stream, &Message::HashDH2(rc_m1));
 
-    let sd_m2 = end_r.rx.recv().unwrap();
-    let indicator = receiver.compare(&_blinded, &sd_m2);
+    // let _sender_points = end_r.rx.recv().unwrap();
+    if let Message::HashDH2(_sender_points) = receive_framed_message(&mut stream).unwrap() {
+        let (_blinded, sender_points) = receiver.blind(&_sender_points);
 
-    let stream = TcpStream::connect(addr).unwrap();
+        // let sd_m2 = end_r.rx.recv().unwrap();
+        if let Message::HashDH2(sd_m2) = receive_framed_message(&mut stream).unwrap() {
+            let indicator = receiver.compare(&_blinded, &sd_m2);
 
-    let (results, c, z0, z1) = otext_recv_quadra::<KosReceiver>(&stream, &indicator);
+            let (results, c, z0, z1) = otext_recv_quadra::<KosReceiver>(&stream, &indicator);
 
-    let mut hasher = Blake2s256::new();
-    for i in 0..n {
-        if !indicator[i] {
-            let h = sender_points[i];
-            let hi = _sender_points[i];
-            let g = hash_to_curve(&results[i].as_array())
-                .to_edwards(0u8)
-                .unwrap();
-            let cs = Scalar::from_bytes_mod_order(set_high_bits(&c[i].as_array()));
-            let zs =
-                Scalar::from_bytes_mod_order(combine_array(&z0[i].as_array(), &z1[i].as_array()));
+            let mut hasher = Blake2s256::new();
+            for i in 0..n {
+                if !indicator[i] {
+                    let h = sender_points[i];
+                    let hi = _sender_points[i];
+                    let g = hash_to_curve(&results[i].as_array())
+                        .to_edwards(0u8)
+                        .unwrap();
+                    let cs = Scalar::from_bytes_mod_order(set_high_bits(&c[i].as_array()));
+                    let zs = Scalar::from_bytes_mod_order(combine_array(
+                        &z0[i].as_array(),
+                        &z1[i].as_array(),
+                    ));
 
-            let scalars = [zs, cs];
-            let bases = [g.mul_by_cofactor(), h];
-            let gr = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases).compress();
-            // let gr = (g * zs * *SC_8 + h * cs).compress();
+                    let scalars = [zs, cs];
+                    let bases = [g.mul_by_cofactor(), h];
+                    let gr = EdwardsPoint::vartime_multiscalar_mul(&scalars, &bases).compress();
+                    // let gr = (g * zs * *SC_8 + h * cs).compress();
 
-            hasher.update(g.compress().as_bytes());
-            hasher.update(hi.as_bytes());
-            hasher.update(gr.as_bytes());
-            let _hc: [u8; 32] = hasher.finalize_reset().into();
-            // assert!(_hc[..16] == c[i].as_array()); // correctness check
+                    hasher.update(g.compress().as_bytes());
+                    hasher.update(hi.as_bytes());
+                    hasher.update(gr.as_bytes());
+                    let _hc: [u8; 32] = hasher.finalize_reset().into();
+                    // assert!(_hc[..16] == c[i].as_array()); // correctness check
+                }
+            }
         }
     }
 
