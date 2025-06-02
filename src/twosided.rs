@@ -13,9 +13,9 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
-use scuttlebutt::{AbstractChannel, AesRng, Block, Channel};
+use scuttlebutt::Channel;
 use socket2::SockRef; // <- new
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter};
 
 use anyhow::{Ok, Result};
 use std::collections::HashSet;
@@ -217,10 +217,10 @@ impl Party {
 }
 
 fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
-    // stream.set_nodelay(true); // eliminate Nagle delay
-    // let sock = SockRef::from(&stream);
-    // sock.set_send_buffer_size(1 << 20);
-    // sock.set_recv_buffer_size(1 << 20);
+    stream.set_nodelay(true); // eliminate Nagle delay
+    let sock = SockRef::from(&stream);
+    sock.set_send_buffer_size(1 << 20);
+    sock.set_recv_buffer_size(1 << 20);
     let reader = BufReader::new(stream.try_clone().unwrap());
     let writer = BufWriter::new(stream);
     let mut channel = Channel::new(reader, writer);
@@ -229,7 +229,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
 
     // Round 1
 
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
 
     let right_sigma = if party.server {
         write_msg(&mut channel, &Message::Round1(sigma));
@@ -246,11 +246,11 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         s
     };
 
-    let duration = start.elapsed();
-    println!("R1 R/W time {:?}", duration);
+    // let duration = start.elapsed();
+    // println!("R1 R/W time {:?}", duration);
 
     //  Round 2
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
     let (right_pk, _right_points) = if party.server {
         write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
         match read_msg(&mut channel).unwrap() {
@@ -265,13 +265,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
         s
     };
-    // to_net_tx.send(Message::Round2((party.pk, _points.clone())))?;
-    // let (right_pk, _right_points) = match fr.read_msg().await? {
-    //     Message::Round2((a, b)) => (a, b),
-    //     _other => anyhow::bail!("expected Round2"),
-    // };
-    let duration = start.elapsed();
-    println!("R2 R/W time {:?}", duration);
+    // let duration = start.elapsed();
+    // println!("R2 R/W time {:?}", duration);
 
     let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
     if !valid {
@@ -281,7 +276,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         party.blind_shuffle(&pp, &right_points, &_right_points);
 
     // Round 3
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
     let (right_proof1, _shuffled) = if party.server {
         write_msg(
             &mut channel,
@@ -302,13 +297,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         );
         s
     };
-    // to_net_tx.send(Message::Round3((proof1, _right_shuffled.clone())))?;
-    // let (right_proof1, _shuffled) = match fr.read_msg().await? {
-    //     Message::Round3((a, b)) => (a, b),
-    //     _other => anyhow::bail!("expected Round3"),
-    // };
-    let duration = start.elapsed();
-    println!("R3 R/W time {:?}", duration);
+    // let duration = start.elapsed();
+    // println!("R3 R/W time {:?}", duration);
 
     let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
     let (_unblinded, ind, proof2) = match party.final_response(
@@ -326,7 +316,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
     };
 
     // Round 4
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
     let (right_proof2, _right_unblinded, right_ind) = if party.server {
         write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
         match read_msg(&mut channel).unwrap() {
@@ -341,13 +331,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
         s
     };
-    // to_net_tx.send(Message::Round4((proof2, _unblinded, ind)))?;
-    // let (right_proof2, _right_unblinded, right_ind) = match fr.read_msg().await? {
-    //     Message::Round4((a, b, c)) => (a, b, c),
-    //     _other => anyhow::bail!("expected Round4"),
-    // };
-    let duration = start.elapsed();
-    println!("R4 R/W time {:?}", duration);
+    // let duration = start.elapsed();
+    // println!("R4 R/W time {:?}", duration);
 
     let right_size = right_ind.len();
     let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
@@ -384,17 +369,17 @@ pub fn malicious_psu2(
     let s_handle = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
 
-        let start = std::time::Instant::now();
+        // let start = std::time::Instant::now();
         let _out = protocol(&right_party, stream, pp);
-        let dur = start.elapsed();
-        println!("server time: {:?}", dur);
+        // let dur = start.elapsed();
+        // println!("server time: {:?}", dur);
     });
 
     let stream = TcpStream::connect(addr).unwrap();
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
     let output = protocol(&left_party, stream, pp).unwrap();
-    let dur = start.elapsed();
-    println!("client time: {:?}", dur);
+    // let dur = start.elapsed();
+    // println!("client time: {:?}", dur);
 
     s_handle.join().unwrap();
     Some(output)

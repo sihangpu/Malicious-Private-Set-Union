@@ -18,11 +18,9 @@ pub enum Message {
 #[inline(always)]
 pub fn read_msg<C: AbstractChannel>(channel: &mut C) -> Result<Message> {
     let len = channel.read_u32()? as usize;
-    println!("len is {:?}", len);
     let mut buf: Vec<u8> = vec![0u8; len];
     channel.read_bytes(&mut buf)?;
     let msg: Message = bincode::deserialize(&buf)?;
-    println!("read ok");
     Ok(msg)
 }
 
@@ -32,7 +30,6 @@ pub fn write_msg<C: AbstractChannel>(channel: &mut C, msg: &Message) -> Result<(
     channel.write_u32(payload.len() as u32)?;
     channel.write_bytes(&payload)?;
     channel.flush()?;
-    println!("write ok");
     Ok(())
 }
 
