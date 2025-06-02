@@ -1,13 +1,9 @@
 use crate::aok::{AdaptedShuffleProof, BatchedDDHProof};
 
-use curve25519_dalek::{edwards::CompressedEdwardsY, edwards::EdwardsPoint, MontgomeryPoint};
-use serde::{Deserialize, Serialize};
-
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::mpsc::UnboundedReceiver as Rx;
+use curve25519_dalek::{edwards::CompressedEdwardsY, edwards::EdwardsPoint, MontgomeryPoint};
+use scuttlebutt::AbstractChannel;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Message {
@@ -19,64 +15,56 @@ pub enum Message {
     HashDH2(Vec<CompressedEdwardsY>), // for sender-malicious one
 }
 
-// pub enum Outgoing {
-//     Plain(Bytes),
-// }
-
-// /// Net→app messages.
-
-// pub enum Incoming {
-//     Plain(Bytes),
-// }
-
-pub struct FramedRead<R>(pub BufReader<R>);
-pub struct FramedWrite<W>(pub W);
-
-impl<R: AsyncReadExt + Unpin> FramedRead<R> {
-    pub async fn read_msg(&mut self) -> Result<Message> {
-        let len = self.0.read_u32_le().await? as usize;
-        let mut buf = BytesMut::with_capacity(len);
-        buf.resize(len, 0);
-        self.0.read_exact(&mut buf).await?;
-        let bytes: Vec<u8> = buf.freeze().try_into()?;
-        let msg: Message = bincode::deserialize(&bytes).unwrap();
-
-        Ok(msg)
-    }
-}
-impl<W: AsyncWriteExt + Unpin> FramedWrite<W> {
-    pub async fn write_msg(&mut self, msg: &Message) -> Result<()> {
-        let payload = bincode::serialize(msg).unwrap();
-        let bytes = Bytes::from(payload);
-        self.0.write_u32_le(bytes.len() as u32).await?;
-        self.0.write_all(&bytes).await?;
-        self.0.flush().await?;
-
-        Ok(())
-    }
+#[inline(always)]
+pub fn read_msg<C: AbstractChannel>(channel: &mut C) -> Result<Message> {
+    let len = channel.read_u32()? as usize;
+    println!("len is {:?}", len);
+    let mut buf: Vec<u8> = vec![0u8; len];
+    channel.read_bytes(&mut buf)?;
+    let msg: Message = bincode::deserialize(&buf)?;
+    println!("read ok");
+    Ok(msg)
 }
 
-/// Spawn one writer task that owns the write-half
-pub async fn spawn_writer(mut fw: FramedWrite<OwnedWriteHalf>, mut tx_rx: Rx<Message>) {
-    while let Some(msg) = tx_rx.recv().await {
-        if let Err(e) = fw.write_msg(&msg).await {
-            eprintln!("write error: {e}");
-            break;
+#[inline(always)]
+pub fn write_msg<C: AbstractChannel>(channel: &mut C, msg: &Message) -> Result<()> {
+    let payload = bincode::serialize(msg)?;
+    channel.write_u32(payload.len() as u32)?;
+    channel.write_bytes(&payload)?;
+    channel.flush()?;
+    println!("write ok");
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use scuttlebutt::Channel;
+    use std::io::{BufReader, BufWriter};
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn io_test() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let s_handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let reader = BufReader::new(stream.try_clone().unwrap());
+            let writer = BufWriter::new(stream);
+            let mut channel = Channel::new(reader, writer);
+
+            let start = std::time::Instant::now();
+            let _out = write_msg(&mut channel, &Message::Round1([9u8; 32]));
+            let dur = start.elapsed();
+            println!("server time: {:?}", dur);
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let writer = BufWriter::new(stream);
+        let mut channel = Channel::new(reader, writer);
+        if let Message::Round1(output) = read_msg(&mut channel).unwrap() {
+            println!("outptu-> {:?}", output);
         }
+        s_handle.join().unwrap();
     }
 }
-
-// /// Spawn one reader task that owns the read-half
-// pub async fn spawn_reader(mut fr: FramedRead<tokio::net::tcp::ReadHalf<'_>>, rx_tx: Tx<Message>) {
-//     loop {
-//         match fr.read_msg().await {
-//             Ok(msg) => {
-//                 let _ = rx_tx.send(msg); // deliver to app
-//             }
-//             Err(e) => {
-//                 eprintln!("read error: {e}");
-//                 break;
-//             }
-//         }
-//     }
-// }

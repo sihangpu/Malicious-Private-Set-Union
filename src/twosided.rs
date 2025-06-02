@@ -3,7 +3,7 @@ use crate::aok::{
     random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
     BatchedDDHProof, PublicParams,
 };
-use crate::channel::{spawn_writer, FramedRead, FramedWrite, Message};
+use crate::channel::{read_msg, write_msg, Message};
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 
 use blake2::{Blake2s256, Digest};
@@ -13,21 +13,18 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
+use scuttlebutt::{AbstractChannel, AesRng, Block, Channel};
 use socket2::SockRef; // <- new
-                      // use std::io::{BufReader, BufWriter};
-                      // use std::net::{TcpListener, TcpStream};
+use std::io::{BufReader, BufWriter, Read, Write};
+
 use anyhow::{Ok, Result};
 use std::collections::HashSet;
-use tokio::io::BufReader;
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpListener, TcpStream,
-};
-use tokio::sync::mpsc::unbounded_channel;
+use std::net::{TcpListener, TcpStream};
 
 // Our highly efficient and fully malicious PSU with two-sided output
 // Symmetric protocol
 pub struct Party {
+    server: bool,
     input: Vec<u8>,           // n input elements with each 128-bit length
     n: usize,                 // number of items
     sk_8: [u8; 32],           // the clamped integer (8 * sk)
@@ -43,6 +40,7 @@ pub struct Party {
 
 impl Party {
     pub fn new(
+        server: bool,
         input: Vec<u8>,
         aes_key: &[u8; 16],
         pp: &PublicParams,
@@ -60,6 +58,7 @@ impl Party {
         let permut = FeistelPrp256::new(&aes_key);
         let hint = prove_shuffle_adapted_preprocess(pp, &pi, n);
         Self {
+            server,
             input,
             n,
             sk_8,
@@ -217,54 +216,97 @@ impl Party {
     }
 }
 
-async fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Result<Vec<u8>> {
-    stream.set_nodelay(true)?; // eliminate Nagle delay
-    let sock = SockRef::from(&stream);
-    sock.set_send_buffer_size(1 << 20)?;
-    sock.set_recv_buffer_size(1 << 20)?;
+fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
+    // stream.set_nodelay(true); // eliminate Nagle delay
+    // let sock = SockRef::from(&stream);
+    // sock.set_send_buffer_size(1 << 20);
+    // sock.set_recv_buffer_size(1 << 20);
+    let reader = BufReader::new(stream.try_clone().unwrap());
+    let writer = BufWriter::new(stream);
+    let mut channel = Channel::new(reader, writer);
 
-    let (rd, wr) = stream.into_split();
-    let mut fr = FramedRead(BufReader::new(rd));
-    let (to_net_tx, to_net_rx) = unbounded_channel::<Message>();
-    tokio::spawn(spawn_writer(FramedWrite(wr), to_net_rx));
     let (sigma, points, _points) = party.gen();
 
     // Round 1
+
     let start = std::time::Instant::now();
-    to_net_tx.send(Message::Round1(sigma))?;
-    let right_sigma = match fr.read_msg().await? {
-        Message::Round1(s) => s, // expected variant
-        _other => anyhow::bail!("expected Round1"),
+
+    let right_sigma = if party.server {
+        write_msg(&mut channel, &Message::Round1(sigma));
+        match read_msg(&mut channel).unwrap() {
+            Message::Round1(s) => s,
+            _ => return None,
+        }
+    } else {
+        let s = match read_msg(&mut channel).unwrap() {
+            Message::Round1(s) => s,
+            _ => return None,
+        };
+        write_msg(&mut channel, &Message::Round1(sigma));
+        s
     };
+
     let duration = start.elapsed();
     println!("R1 R/W time {:?}", duration);
 
     //  Round 2
     let start = std::time::Instant::now();
-    to_net_tx.send(Message::Round2((party.pk, _points.clone())))?;
-    let (right_pk, _right_points) = match fr.read_msg().await? {
-        Message::Round2((a, b)) => (a, b),
-        _other => anyhow::bail!("expected Round2"),
+    let (right_pk, _right_points) = if party.server {
+        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
+        match read_msg(&mut channel).unwrap() {
+            Message::Round2((a, b)) => (a, b),
+            _ => return None,
+        }
+    } else {
+        let s = match read_msg(&mut channel).unwrap() {
+            Message::Round2((a, b)) => (a, b),
+            _ => return None,
+        };
+        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
+        s
     };
+    // to_net_tx.send(Message::Round2((party.pk, _points.clone())))?;
+    // let (right_pk, _right_points) = match fr.read_msg().await? {
+    //     Message::Round2((a, b)) => (a, b),
+    //     _other => anyhow::bail!("expected Round2"),
+    // };
     let duration = start.elapsed();
     println!("R2 R/W time {:?}", duration);
 
     let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
     if !valid {
-        return Err(anyhow::anyhow!(
-            "First round commitment verification failed"
-        ));
+        return None;
     }
     let (proof1, right_shuffled, _right_shuffled) =
         party.blind_shuffle(&pp, &right_points, &_right_points);
 
     // Round 3
     let start = std::time::Instant::now();
-    to_net_tx.send(Message::Round3((proof1, _right_shuffled.clone())))?;
-    let (right_proof1, _shuffled) = match fr.read_msg().await? {
-        Message::Round3((a, b)) => (a, b),
-        _other => anyhow::bail!("expected Round3"),
+    let (right_proof1, _shuffled) = if party.server {
+        write_msg(
+            &mut channel,
+            &Message::Round3((proof1, _right_shuffled.clone())),
+        );
+        match read_msg(&mut channel).unwrap() {
+            Message::Round3((a, b)) => (a, b),
+            _ => return None,
+        }
+    } else {
+        let s = match read_msg(&mut channel).unwrap() {
+            Message::Round3((a, b)) => (a, b),
+            _ => return None,
+        };
+        write_msg(
+            &mut channel,
+            &Message::Round3((proof1, _right_shuffled.clone())),
+        );
+        s
     };
+    // to_net_tx.send(Message::Round3((proof1, _right_shuffled.clone())))?;
+    // let (right_proof1, _shuffled) = match fr.read_msg().await? {
+    //     Message::Round3((a, b)) => (a, b),
+    //     _other => anyhow::bail!("expected Round3"),
+    // };
     let duration = start.elapsed();
     println!("R3 R/W time {:?}", duration);
 
@@ -280,16 +322,30 @@ async fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Result
         &right_proof1,
     ) {
         Some(a) => a,
-        _other => anyhow::bail!("Shuffle proof failed"),
+        _ => return None,
     };
 
     // Round 4
     let start = std::time::Instant::now();
-    to_net_tx.send(Message::Round4((proof2, _unblinded, ind)))?;
-    let (right_proof2, _right_unblinded, right_ind) = match fr.read_msg().await? {
-        Message::Round4((a, b, c)) => (a, b, c),
-        _other => anyhow::bail!("expected Round4"),
+    let (right_proof2, _right_unblinded, right_ind) = if party.server {
+        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
+        match read_msg(&mut channel).unwrap() {
+            Message::Round4((a, b, c)) => (a, b, c),
+            _ => return None,
+        }
+    } else {
+        let s = match read_msg(&mut channel).unwrap() {
+            Message::Round4((a, b, c)) => (a, b, c),
+            _ => return None,
+        };
+        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
+        s
     };
+    // to_net_tx.send(Message::Round4((proof2, _unblinded, ind)))?;
+    // let (right_proof2, _right_unblinded, right_ind) = match fr.read_msg().await? {
+    //     Message::Round4((a, b, c)) => (a, b, c),
+    //     _other => anyhow::bail!("expected Round4"),
+    // };
     let duration = start.elapsed();
     println!("R4 R/W time {:?}", duration);
 
@@ -314,37 +370,34 @@ async fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Result
         )
         .unwrap();
 
-    Ok(output)
+    Some(output)
 }
 
-pub async fn malicious_psu2(
+pub fn malicious_psu2(
     left_party: Party,
     right_party: Party,
     pp: &'static PublicParams,
-) -> Result<Vec<u8>> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+) -> Option<Vec<u8>> {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let s_handle = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await?;
+    let s_handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
 
         let start = std::time::Instant::now();
-        let _out = protocol(&right_party, stream, pp).await?;
+        let _out = protocol(&right_party, stream, pp);
         let dur = start.elapsed();
         println!("server time: {:?}", dur);
-
-        Ok(())
     });
 
-    let stream = TcpStream::connect(addr).await?;
+    let stream = TcpStream::connect(addr).unwrap();
     let start = std::time::Instant::now();
-    let output = protocol(&left_party, stream, pp).await?;
+    let output = protocol(&left_party, stream, pp).unwrap();
     let dur = start.elapsed();
     println!("client time: {:?}", dur);
 
-    s_handle.await??;
-
-    Ok(output)
+    s_handle.join().unwrap();
+    Some(output)
 }
 
 // Check if the malicious PSU protocol ends with correct outputs
@@ -453,8 +506,8 @@ mod test {
     use super::*;
     use crate::aok::{parse_power_or_letter, pub_params, setup_params};
 
-    #[tokio::test]
-    async fn malicious_psu2_test() -> Result<()> {
+    #[test]
+    fn malicious_psu2_test() -> Result<()> {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
@@ -468,13 +521,13 @@ mod test {
         let pp = pub_params();
 
         let start = std::time::Instant::now();
-        let left_party = Party::new(input_v.clone(), &aes_key, pp, n, n);
+        let left_party = Party::new(false, input_v.clone(), &aes_key, pp, n, n);
         let offline = start.elapsed();
 
-        let right_party = Party::new(input_w.clone(), &aes_key, pp, n, n);
+        let right_party = Party::new(true, input_w.clone(), &aes_key, pp, n, n);
 
         let start = std::time::Instant::now();
-        let recovered_w = malicious_psu2(left_party, right_party, pp).await?;
+        let recovered_w = malicious_psu2(left_party, right_party, pp).unwrap();
         let duration = start.elapsed();
 
         assert!(
