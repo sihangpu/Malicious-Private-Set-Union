@@ -18,7 +18,7 @@ rustflags = ['--cfg=curve25519_dalek_backend="u64"',
 #        '--cfg=curve25519_dalek_backend="simd"',  # u64 or simd
 #        "-C", "target-cpu=sapphirerapids",
 #        "-C", "target-feature=+sse4.2,+ssse3,+avx,+avx2,+fma,+bmi1,+bmi2,+aes,+pclmulqdq",
-#        "-Z", "tune-cpu=native",
+#        "-Z", "tune-cpu=sapphirerapids",  # use native
 #]
 
 [alias]
