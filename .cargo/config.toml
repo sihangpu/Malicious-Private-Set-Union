@@ -1,7 +1,8 @@
 [target.aarch64-apple-darwin]
 rustflags = ['--cfg=curve25519_dalek_backend="u64"',
              "-C", "target-cpu=apple-m1",    
-             "-C", "target-feature=+sse4.1,+neon,+aes,+sha2,+crc,+fp16,+rcpc",
+             "-C", "target-feature=+sse4.1,+ssse3,+neon,+aes,+sha2,+crc,+fp16,+rcpc",
+             "-Z", "tune-cpu=apple-m1",
              "--cfg=aes_armv8",
              ]
 
@@ -16,7 +17,7 @@ rustflags = ['--cfg=curve25519_dalek_backend="u64"',
 # rustflags = [
 #        '--cfg=curve25519_dalek_backend="simd"',  # u64 or simd
 #        "-C", "target-cpu=sapphirerapids",
-#        "-C", "target-feature=+avx512f,+avx512dq,+avx512vl,+avx512bw,+avx512ifma,+avx512vbmi,+avx512vnni,+avx512vpopcntdq,+sse4.2,+avx,+avx2,+fma,+bmi1,+bmi2,+aes,+pclmulqdq",
+#        "-C", "target-feature=+sse4.2,+ssse3,+avx,+avx2,+fma,+bmi1,+bmi2,+aes,+pclmulqdq",
 #        "-Z", "tune-cpu=native",
 #]
 

@@ -7,15 +7,19 @@ use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 use crate::onesided::{duplex, Duplex};
 
 use blake2::{Blake2s256, Digest};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use curve25519_dalek::{
     edwards::CompressedEdwardsY,
     edwards::EdwardsPoint,
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::{collections::HashSet, thread};
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 enum Message {
     Round1([u8; 32]),
     Round2((EdwardsPoint, Vec<CompressedEdwardsY>)),
@@ -23,6 +27,45 @@ enum Message {
     Round4((BatchedDDHProof, Vec<CompressedEdwardsY>, Vec<u32>)),
 }
 
+fn serialize_message_bincode(msg: &Message) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let bytes = bincode::serialize(msg)?;
+    Ok(bytes)
+}
+
+fn deserialize_message_bincode(bytes: &[u8]) -> Result<Message, Box<dyn std::error::Error>> {
+    let msg: Message = bincode::deserialize(bytes)?;
+    Ok(msg)
+}
+
+fn send_framed_message(
+    stream: &mut TcpStream,
+    msg: &Message,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Serialize via bincode (for compactness)
+    let payload = bincode::serialize(msg)?;
+    let length = payload.len() as u32;
+
+    // Write length prefix (4 bytes, little endian)
+    stream.write_u32::<LittleEndian>(length)?;
+    // Write payload
+    stream.write_all(&payload)?;
+    Ok(())
+}
+
+fn receive_framed_message(
+    stream: &mut TcpStream,
+) -> Result<Option<Message>, Box<dyn std::error::Error>> {
+    // Read the 4-byte length prefix
+    let length = stream.read_u32::<LittleEndian>().unwrap() as usize;
+
+    let mut buf = vec![0u8; length];
+    stream.read_exact(&mut buf)?;
+
+    // Deserialize via bincode
+    let msg: Message = bincode::deserialize(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(Some(msg))
+}
 // Our highly efficient and fully malicious PSU with two-sided output
 // Symmetric protocol
 pub struct Party {

@@ -8,6 +8,7 @@ use rand_chacha::ChaCha12Rng;
 
 use itertools::izip;
 use rand::{thread_rng, Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 /// Public parameters for Pederson commitment: generators g,f_1, …, f_n
@@ -48,7 +49,7 @@ pub fn parse_power_or_letter(s: &str) -> Result<u32, &'static str> {
         .map_err(|_| "not a valid integer")
 }
 
-#[derive(Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct KnownContentProof {
     pub _c_d: CompressedEdwardsY,
     pub _c_delta: CompressedEdwardsY,
@@ -69,7 +70,7 @@ pub struct KnownContentHint {
     pub c_delta: EdwardsPoint,
 }
 
-#[derive(Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct AdaptedShuffleProof {
     pub _c_pi: CompressedEdwardsY,
     pub _c_d: CompressedEdwardsY,
@@ -95,7 +96,7 @@ pub struct AdaptedShuffleHint {
     pub hint2: KnownContentHint,
 }
 
-#[derive(Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct BatchedDDHProof {
     pub _c: CompressedEdwardsY,
     pub z: Scalar,
