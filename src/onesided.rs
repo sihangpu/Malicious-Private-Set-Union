@@ -1,5 +1,5 @@
 use crate::aok::random_permutation;
-use crate::channel::{receive_framed_message, send_framed_message, Message};
+use crate::channel::{recv_framed, send_framed, Message};
 use crate::mapping::hash_to_curve;
 
 use blake2::{Blake2s256, Digest};
@@ -248,101 +248,111 @@ impl PartyReceiver1M {
     }
 }
 
-fn otext_send<OTSender: Sender<Msg = Block>>(stream: &TcpStream, ms: Vec<(Block, Block)>) {
-    let mut rng = AesRng::new();
-    let reader = BufReader::new(stream.try_clone().unwrap());
-    let writer = BufWriter::new(stream);
-    let mut channel = Channel::new(reader, writer);
+// fn otext_send<OTSender: Sender<Msg = Block>>(channel: Channel, ms: Vec<(Block, Block)>) {
+//     let mut rng = AesRng::new();
+//     let reader = BufReader::new(stream.try_clone().unwrap());
+//     let writer = BufWriter::new(stream);
+//     let mut channel = Channel::new(reader, writer);
 
-    let mut otext = OTSender::init(&mut channel, &mut rng).unwrap();
-    otext.send(&mut channel, &ms, &mut rng).unwrap();
-}
+//     let mut otext = OTSender::init(&mut channel, &mut rng).unwrap();
+//     otext.send(&mut channel, &ms, &mut rng).unwrap();
+// }
 
-fn otext_send_quadra<OTSender: Sender<Msg = Block>>(
-    stream: &TcpStream,
-    ms: (
-        Vec<(Block, Block)>,
-        Vec<(Block, Block)>,
-        Vec<(Block, Block)>,
-        Vec<(Block, Block)>,
-    ),
-) {
-    let mut rng = AesRng::new();
-    let reader = BufReader::new(stream.try_clone().unwrap());
-    let writer = BufWriter::new(stream);
-    let mut channel = Channel::new(reader, writer);
+// fn otext_send_quadra<OTSender: Sender<Msg = Block>>(
+//     stream: &TcpStream,
+//     ms: (
+//         Vec<(Block, Block)>,
+//         Vec<(Block, Block)>,
+//         Vec<(Block, Block)>,
+//         Vec<(Block, Block)>,
+//     ),
+// ) {
+//     let mut rng = AesRng::new();
+//     let reader = BufReader::new(stream.try_clone().unwrap());
+//     let writer = BufWriter::new(stream);
+//     let mut channel = Channel::new(reader, writer);
 
-    let mut otext = OTSender::init(&mut channel, &mut rng).unwrap();
+//     let mut otext = OTSender::init(&mut channel, &mut rng).unwrap();
 
-    otext.send(&mut channel, &ms.0, &mut rng).unwrap();
-    otext.send(&mut channel, &ms.1, &mut rng).unwrap();
-    otext.send(&mut channel, &ms.2, &mut rng).unwrap();
-    otext.send(&mut channel, &ms.3, &mut rng).unwrap();
-}
+//     otext.send(&mut channel, &ms.0, &mut rng).unwrap();
+//     otext.send(&mut channel, &ms.1, &mut rng).unwrap();
+//     otext.send(&mut channel, &ms.2, &mut rng).unwrap();
+//     otext.send(&mut channel, &ms.3, &mut rng).unwrap();
+// }
 
-fn otext_recv<OTReceiver: Receiver<Msg = Block>>(stream: &TcpStream, bs: &[bool]) -> Vec<Block> {
-    let mut rng = AesRng::new();
-    let reader = BufReader::new(stream.try_clone().unwrap());
-    let writer = BufWriter::new(stream);
-    let mut channel = Channel::new(reader, writer);
+// fn otext_recv<OTReceiver: Receiver<Msg = Block>>(stream: &TcpStream, bs: &[bool]) -> Vec<Block> {
+//     let mut rng = AesRng::new();
+//     let reader = BufReader::new(stream.try_clone().unwrap());
+//     let writer = BufWriter::new(stream);
+//     let mut channel = Channel::new(reader, writer);
 
-    let mut otext = OTReceiver::init(&mut channel, &mut rng).unwrap();
-    let results = otext.receive(&mut channel, &bs, &mut rng).unwrap();
+//     let mut otext = OTReceiver::init(&mut channel, &mut rng).unwrap();
+//     let results = otext.receive(&mut channel, &bs, &mut rng).unwrap();
 
-    results
-}
+//     results
+// }
 
-fn otext_recv_quadra<OTReceiver: Receiver<Msg = Block>>(
-    stream: &TcpStream,
-    bs: &[bool],
-) -> (Vec<Block>, Vec<Block>, Vec<Block>, Vec<Block>) {
-    let mut rng = AesRng::new();
-    let reader = BufReader::new(stream.try_clone().unwrap());
-    let writer = BufWriter::new(stream);
-    let mut channel = Channel::new(reader, writer);
+// fn otext_recv_quadra<OTReceiver: Receiver<Msg = Block>>(
+//     stream: &TcpStream,
+//     bs: &[bool],
+// ) -> (Vec<Block>, Vec<Block>, Vec<Block>, Vec<Block>) {
+//     let mut rng = AesRng::new();
+//     let reader = BufReader::new(stream.try_clone().unwrap());
+//     let writer = BufWriter::new(stream);
+//     let mut channel = Channel::new(reader, writer);
 
-    let mut otext = OTReceiver::init(&mut channel, &mut rng).unwrap();
+//     let mut otext = OTReceiver::init(&mut channel, &mut rng).unwrap();
 
-    let result0 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
-    let result1 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
-    let result2 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
-    let result3 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
+//     let result0 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
+//     let result1 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
+//     let result2 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
+//     let result3 = otext.receive(&mut channel, &bs, &mut rng).unwrap();
 
-    (result0, result1, result2, result3)
-}
+//     (result0, result1, result2, result3)
+// }
 
 pub fn semi_honest_psu1(sender: PartySender, receiver: PartyReceiver, ms: Vec<(Block, Block)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
     let s_handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
 
         let (sd_m1, _) = sender.gen();
-        send_framed_message(&mut stream, &Message::HashDH(sd_m1));
+        send_framed(&mut writer, &Message::HashDH(sd_m1));
 
-        if let Message::HashDH(rc_m1) = receive_framed_message(&mut stream).unwrap() {
+        if let Message::HashDH(rc_m1) = recv_framed(&mut reader).unwrap() {
             let sd_m2 = sender.blind_and_shuffle(&rc_m1);
 
-            send_framed_message(&mut stream, &Message::HashDH(sd_m2));
-            otext_send::<AlszSender>(&stream, ms);
+            send_framed(&mut writer, &Message::HashDH(sd_m2));
+
+            let mut rng = AesRng::new();
+            let mut channel = Channel::new(reader, writer);
+            let mut otext = AlszSender::init(&mut channel, &mut rng).unwrap();
+            otext.send(&mut channel, &ms, &mut rng).unwrap();
         }
     });
-    let mut stream = TcpStream::connect(addr).unwrap();
+    let stream = TcpStream::connect(addr).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut writer = BufWriter::new(stream);
 
     let rc_m1 = receiver.gen();
-    // end_r.tx.send(rc_m1).unwrap();
-    send_framed_message(&mut stream, &Message::HashDH(rc_m1));
 
-    if let Message::HashDH(sd_m1) = receive_framed_message(&mut stream).unwrap() {
-        // end_r.rx.recv().unwrap();
+    send_framed(&mut writer, &Message::HashDH(rc_m1));
+
+    if let Message::HashDH(sd_m1) = recv_framed(&mut reader).unwrap() {
         let blinded = receiver.blind(&sd_m1);
 
-        if let Message::HashDH(sd_m2) = receive_framed_message(&mut stream).unwrap() {
-            // end_r.rx.recv().unwrap();
+        if let Message::HashDH(sd_m2) = recv_framed(&mut reader).unwrap() {
             let indicator = receiver.compare(&blinded, &sd_m2);
+            let mut rng = AesRng::new();
 
-            let _results = otext_recv::<AlszReceiver>(&stream, &indicator);
+            let mut channel = Channel::new(reader, writer);
+
+            let mut otext = AlszReceiver::init(&mut channel, &mut rng).unwrap();
+            let _results = otext.receive(&mut channel, &indicator, &mut rng).unwrap();
         }
     }
     s_handle.join().unwrap();
@@ -376,13 +386,15 @@ pub fn sender_malicious_psu1(
     let n = sender.n;
 
     let s_handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
         let (_points, original, _original) = sender.gen();
 
-        send_framed_message(&mut stream, &Message::HashDH2(_points.clone()));
-        if let Message::HashDH2(rc_m1) = receive_framed_message(&mut stream).unwrap() {
+        send_framed(&mut writer, &Message::HashDH2(_points.clone()));
+        if let Message::HashDH2(rc_m1) = recv_framed(&mut reader).unwrap() {
             let sd_m2 = sender.blind_and_shuffle(&rc_m1);
-            send_framed_message(&mut stream, &Message::HashDH2(sd_m2));
+            send_framed(&mut writer, &Message::HashDH2(sd_m2));
 
             let mut c: Vec<Block> = Vec::with_capacity(sender.n);
             let mut z0: Vec<Block> = Vec::with_capacity(sender.n);
@@ -423,25 +435,41 @@ pub fn sender_malicious_psu1(
                     .collect::<Vec<(Block, Block)>>(),
             );
 
-            otext_send_quadra::<KosSender>(&stream, chunk);
+            let mut rng = AesRng::new();
+            let mut channel = Channel::new(reader, writer);
+            let mut otext = KosSender::init(&mut channel, &mut rng).unwrap();
+
+            otext.send(&mut channel, &chunk.0, &mut rng).unwrap();
+            otext.send(&mut channel, &chunk.1, &mut rng).unwrap();
+            otext.send(&mut channel, &chunk.2, &mut rng).unwrap();
+            otext.send(&mut channel, &chunk.3, &mut rng).unwrap();
         }
     });
 
-    let mut stream = TcpStream::connect(addr).unwrap();
+    let stream = TcpStream::connect(addr).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut writer = BufWriter::new(stream);
+
     let rc_m1 = receiver.gen();
 
     // end_r.tx.send(rc_m1).unwrap();
-    send_framed_message(&mut stream, &Message::HashDH2(rc_m1));
+    send_framed(&mut writer, &Message::HashDH2(rc_m1));
 
     // let _sender_points = end_r.rx.recv().unwrap();
-    if let Message::HashDH2(_sender_points) = receive_framed_message(&mut stream).unwrap() {
+    if let Message::HashDH2(_sender_points) = recv_framed(&mut reader).unwrap() {
         let (_blinded, sender_points) = receiver.blind(&_sender_points);
 
         // let sd_m2 = end_r.rx.recv().unwrap();
-        if let Message::HashDH2(sd_m2) = receive_framed_message(&mut stream).unwrap() {
+        if let Message::HashDH2(sd_m2) = recv_framed(&mut reader).unwrap() {
             let indicator = receiver.compare(&_blinded, &sd_m2);
 
-            let (results, c, z0, z1) = otext_recv_quadra::<KosReceiver>(&stream, &indicator);
+            let mut rng = AesRng::new();
+            let mut channel = Channel::new(reader, writer);
+            let mut otext = KosReceiver::init(&mut channel, &mut rng).unwrap();
+            let results = otext.receive(&mut channel, &indicator, &mut rng).unwrap();
+            let c = otext.receive(&mut channel, &indicator, &mut rng).unwrap();
+            let z0 = otext.receive(&mut channel, &indicator, &mut rng).unwrap();
+            let z1 = otext.receive(&mut channel, &indicator, &mut rng).unwrap();
 
             let mut hasher = Blake2s256::new();
             for i in 0..n {

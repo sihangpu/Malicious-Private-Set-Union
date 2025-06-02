@@ -3,7 +3,7 @@ use crate::aok::{
     random_permutation, verify_shuffle_adapted, AdaptedShuffleHint, AdaptedShuffleProof,
     BatchedDDHProof, PublicParams,
 };
-use crate::channel::{receive_framed_message, send_framed_message, Message};
+use crate::channel::{recv_framed, send_framed, Message};
 use crate::mapping::{hash_to_point, recover_from_point, FeistelPrp256};
 
 use blake2::{Blake2s256, Digest};
@@ -13,6 +13,7 @@ use curve25519_dalek::{
     scalar::{clamp_integer, Scalar},
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
+use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
 use std::{collections::HashSet, thread};
 
@@ -208,15 +209,20 @@ impl Party {
     }
 }
 
-fn protocol(party: &Party, stream: &mut TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
+fn protocol(party: &Party, stream: &TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut writer = BufWriter::new(stream);
     let (sigma, points, _points) = party.gen();
     // Round 1
-    send_framed_message(stream, &Message::Round1(sigma));
-    if let Message::Round1(right_sigma) = receive_framed_message(stream).unwrap() {
+    send_framed(&mut writer, &Message::Round1(sigma));
+    println!("sent R1");
+    if let Message::Round1(right_sigma) = recv_framed(&mut reader).unwrap() {
+        println!("recv R1");
         //  Round 2
-        send_framed_message(stream, &Message::Round2((party.pk, _points.clone())));
-        if let Message::Round2((right_pk, _right_points)) = receive_framed_message(stream).unwrap()
-        {
+        send_framed(&mut writer, &Message::Round2((party.pk, _points.clone())));
+        println!("sent R2");
+        if let Message::Round2((right_pk, _right_points)) = recv_framed(&mut reader).unwrap() {
+            println!("recv R2");
             let (valid, right_points) = party.verify_sigma(&right_sigma, &right_pk, &_right_points);
             if !valid {
                 println!("First round commitment verification failed!");
@@ -226,10 +232,13 @@ fn protocol(party: &Party, stream: &mut TcpStream, pp: &PublicParams) -> Option<
                 party.blind_shuffle(&pp, &right_points, &_right_points);
 
             // Round 3
-            send_framed_message(stream, &Message::Round3((proof1, _right_shuffled.clone())));
-            if let Message::Round3((right_proof1, _shuffled)) =
-                receive_framed_message(stream).unwrap()
-            {
+            send_framed(
+                &mut writer,
+                &Message::Round3((proof1, _right_shuffled.clone())),
+            );
+            println!("sent R3");
+            if let Message::Round3((right_proof1, _shuffled)) = recv_framed(&mut reader).unwrap() {
+                println!("recv R3");
                 let shuffled = _shuffled.iter().map(|p| p.decompress().unwrap()).collect();
 
                 if let Some((_unblinded, ind, proof2)) = party.final_response(
@@ -243,10 +252,12 @@ fn protocol(party: &Party, stream: &mut TcpStream, pp: &PublicParams) -> Option<
                     &right_proof1,
                 ) {
                     // Round 4
-                    send_framed_message(stream, &Message::Round4((proof2, _unblinded, ind)));
+                    send_framed(&mut writer, &Message::Round4((proof2, _unblinded, ind)));
+                    println!("sent R4");
                     if let Message::Round4((right_proof2, _right_unblinded, right_ind)) =
-                        receive_framed_message(stream).unwrap()
+                        recv_framed(&mut reader).unwrap()
                     {
+                        println!("recv R4");
                         let right_size = right_ind.len();
                         let mut _shrinked: Vec<CompressedEdwardsY> = Vec::with_capacity(right_size);
                         let mut shrinked: Vec<EdwardsPoint> = Vec::with_capacity(right_size);
@@ -288,12 +299,12 @@ pub fn malicious_psu2(
     let addr = listener.local_addr().unwrap();
 
     let s_handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        protocol(&right_party, &mut stream, pp);
+        let (stream, _) = listener.accept().unwrap();
+        protocol(&right_party, &stream, pp);
     });
-    let mut stream = TcpStream::connect(addr).unwrap();
+    let stream = TcpStream::connect(addr).unwrap();
 
-    let output = protocol(&left_party, &mut stream, pp);
+    let output = protocol(&left_party, &stream, pp);
     // println!("Finished!");
 
     s_handle.join().unwrap();
