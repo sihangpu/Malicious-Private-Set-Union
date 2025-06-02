@@ -217,10 +217,10 @@ impl Party {
 }
 
 fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
-    stream.set_nodelay(true); // eliminate Nagle delay
+    // stream.set_nodelay(true); //  Nagle delay on/off
     let sock = SockRef::from(&stream);
-    sock.set_send_buffer_size(1 << 20);
-    sock.set_recv_buffer_size(1 << 20);
+    let _ = sock.set_send_buffer_size(1 << 20); // 1 MB buffer
+    let _ = sock.set_recv_buffer_size(1 << 20);
     let reader = BufReader::new(stream.try_clone().unwrap());
     let writer = BufWriter::new(stream);
     let mut channel = Channel::new(reader, writer);
