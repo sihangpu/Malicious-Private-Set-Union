@@ -1,25 +1,20 @@
+[build]
+rustflags = ['--cfg=curve25519_dalek_backend="simd"',
+             "-C", "target-cpu=znver2",  # sapphirerapids, apple-m1, znver2, native
+             "-Z", "tune-cpu=native",
+            ]
+
 [target.aarch64-apple-darwin]
-rustflags = ['--cfg=curve25519_dalek_backend="u64"',
-             "-C", "target-cpu=apple-m1",    
-             "-C", "target-feature=+neon,+aes,+sha2,+crc,+fp16,+rcpc",
-             "-Z", "tune-cpu=apple-m1",
+rustflags = ["-C", "target-feature=+neon,+aes,+sha2,+crc,+fp16,+rcpc",
              "--cfg=aes_armv8",
              ]
 
-[target.x86_64-unknown-linux-gnu]
-rustflags = ['--cfg=curve25519_dalek_backend="u64"', 
-             "-C", "target-cpu=znver2", 
-             "-C", "target-feature=+sse4.1,+aes,+ssse3,+fma,+bmi2,+avx2",
-             "-Z", "tune-cpu=znver2",
-             ]
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "target-feature=+avx512vl,+avx512ifma,+avx512f,+avx512dq,+avx512bw,+avx512vbmi,+avx512vnni,+avx512vpopcntdq,+aes,+sse4.2,+ssse3,+avx,+avx2,+fma,+bmi1,+bmi2,+pclmulqdq"]   
 
-## Intel CPU
-# rustflags = [
-#        '--cfg=curve25519_dalek_backend="simd"',  # u64 or simd
-#        "-C", "target-cpu=sapphirerapids",
-#        "-C", "target-feature=+sse4.2,+ssse3,+avx,+avx2,+fma,+bmi1,+bmi2,+aes,+pclmulqdq",
-#        "-Z", "tune-cpu=sapphirerapids",  # use native
-#]
+
+[target.'cfg(windows)']
+rustflags = ["-C", "target-feature=+aes,+sse4.1,+ssse3,+fma,+bmi2,+avx,+avx2"]
 
 [alias]
 test-release = "test --release -- --nocapture"
