@@ -14,10 +14,9 @@ use curve25519_dalek::{
 };
 use rand::{seq::SliceRandom, Rng, RngCore};
 use scuttlebutt::Channel;
-use socket2::SockRef; // <- new
+use socket2::SockRef;
 use std::io::{BufReader, BufWriter};
 
-use anyhow::{Ok, Result};
 use std::collections::HashSet;
 use std::net::{TcpListener, TcpStream};
 
@@ -217,10 +216,13 @@ impl Party {
 }
 
 fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u8>> {
-    // stream.set_nodelay(true); //  Nagle delay on/off
+    // stream.set_nodelay(true);
     let sock = SockRef::from(&stream);
-    let _ = sock.set_send_buffer_size(1 << 20); // 1 MB buffer
-    let _ = sock.set_recv_buffer_size(1 << 20);
+
+    let bufsize = 32 * party.n;
+    let _ = sock.set_send_buffer_size(bufsize); // adjusted buffer
+    let _ = sock.set_recv_buffer_size(bufsize);
+
     let reader = BufReader::new(stream.try_clone().unwrap());
     let writer = BufWriter::new(stream);
     let mut channel = Channel::new(reader, writer);
@@ -232,7 +234,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
     // let start = std::time::Instant::now();
 
     let right_sigma = if party.server {
-        write_msg(&mut channel, &Message::Round1(sigma));
+        write_msg(&mut channel, &Message::Round1(sigma)).unwrap();
         match read_msg(&mut channel).unwrap() {
             Message::Round1(s) => s,
             _ => return None,
@@ -242,7 +244,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
             Message::Round1(s) => s,
             _ => return None,
         };
-        write_msg(&mut channel, &Message::Round1(sigma));
+        write_msg(&mut channel, &Message::Round1(sigma)).unwrap();
+
         s
     };
 
@@ -252,7 +255,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
     //  Round 2
     // let start = std::time::Instant::now();
     let (right_pk, _right_points) = if party.server {
-        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
+        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone()))).unwrap();
         match read_msg(&mut channel).unwrap() {
             Message::Round2((a, b)) => (a, b),
             _ => return None,
@@ -262,7 +265,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
             Message::Round2((a, b)) => (a, b),
             _ => return None,
         };
-        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone())));
+        write_msg(&mut channel, &Message::Round2((party.pk, _points.clone()))).unwrap();
+
         s
     };
     // let duration = start.elapsed();
@@ -281,7 +285,8 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         write_msg(
             &mut channel,
             &Message::Round3((proof1, _right_shuffled.clone())),
-        );
+        )
+        .unwrap();
         match read_msg(&mut channel).unwrap() {
             Message::Round3((a, b)) => (a, b),
             _ => return None,
@@ -294,7 +299,9 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
         write_msg(
             &mut channel,
             &Message::Round3((proof1, _right_shuffled.clone())),
-        );
+        )
+        .unwrap();
+
         s
     };
     // let duration = start.elapsed();
@@ -318,7 +325,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
     // Round 4
     // let start = std::time::Instant::now();
     let (right_proof2, _right_unblinded, right_ind) = if party.server {
-        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
+        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind))).unwrap();
         match read_msg(&mut channel).unwrap() {
             Message::Round4((a, b, c)) => (a, b, c),
             _ => return None,
@@ -328,7 +335,7 @@ fn protocol(party: &Party, stream: TcpStream, pp: &PublicParams) -> Option<Vec<u
             Message::Round4((a, b, c)) => (a, b, c),
             _ => return None,
         };
-        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind)));
+        write_msg(&mut channel, &Message::Round4((proof2, _unblinded, ind))).unwrap();
         s
     };
     // let duration = start.elapsed();
@@ -492,7 +499,7 @@ mod test {
     use crate::aok::{parse_power_or_letter, pub_params, setup_params};
 
     #[test]
-    fn malicious_psu2_test() -> Result<()> {
+    fn malicious_psu2_test() {
         let n_str = std::env::var("N").unwrap_or_else(|_| "16384".into());
         let n = parse_power_or_letter(&n_str).expect("bad N") as usize;
 
@@ -524,7 +531,5 @@ mod test {
             "Malicious Two-Sided-Output PSU, set size {:?}, online time {:?}, offline time {:?}",
             n, duration, offline
         );
-
-        Ok(())
     }
 }

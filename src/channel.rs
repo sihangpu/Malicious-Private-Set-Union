@@ -1,9 +1,11 @@
 use crate::aok::{AdaptedShuffleProof, BatchedDDHProof};
 
-use anyhow::Result;
+// use anyhow::Result;
 use curve25519_dalek::{edwards::CompressedEdwardsY, edwards::EdwardsPoint, MontgomeryPoint};
+
 use scuttlebutt::AbstractChannel;
 use serde::{Deserialize, Serialize};
+use std::io::Result;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Message {
@@ -20,13 +22,13 @@ pub fn read_msg<C: AbstractChannel>(channel: &mut C) -> Result<Message> {
     let len = channel.read_u32()? as usize;
     let mut buf: Vec<u8> = vec![0u8; len];
     channel.read_bytes(&mut buf)?;
-    let msg: Message = bincode::deserialize(&buf)?;
+    let msg: Message = bincode::deserialize(&buf).unwrap();
     Ok(msg)
 }
 
 #[inline(always)]
 pub fn write_msg<C: AbstractChannel>(channel: &mut C, msg: &Message) -> Result<()> {
-    let payload = bincode::serialize(msg)?;
+    let payload = bincode::serialize(msg).unwrap();
     channel.write_u32(payload.len() as u32)?;
     channel.write_bytes(&payload)?;
     channel.flush()?;
