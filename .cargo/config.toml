@@ -1,6 +1,6 @@
 [build]
 rustflags = ['--cfg=curve25519_dalek_backend="simd"',
-             "-C", "target-cpu=native",  # sapphirerapids, apple-m1, znver2, native
+             "-C", "target-cpu=native", 
              "-Z", "tune-cpu=native",
             ]
 
